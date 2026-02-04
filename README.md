@@ -16,7 +16,7 @@
 - Path
 - Buttons Save, Edit, Delete\*
 
-\* You can edit or delete the created projects only if it does not have active contests.
+\* Вы можете редактировать или удалить созданные проекты только в том случае, если у них нет активных конкурсов.
 
 ### Кнопка “Add New Project”
 
@@ -45,9 +45,9 @@
 
 **Buttons:** “Save Project” and “Delete Project”
 
-\*We can Edit the project’s Domain and Path if the existing project has zero leagues created.  
-\*\*We cannot Delete Sports if the project contains leagues with the selected Sports.  
-\*\*\*We cannot Edit Points & Ranges if the project has at least one game with status started or finished.
+*Мы можем редактировать Domain и Path проекта, если в существующем проекте создано 0 лиг.
+**Мы не можем удалить Sports, если проект содержит лиги с выбранными Sports.
+***Мы не можем редактировать Points & Ranges, если в проекте есть хотя бы одна игра со статусом started или finished.
 
 ---
 
@@ -93,11 +93,11 @@
 | Rank tipsters by | dropdown | Points |
 | CRUD | buttons | Save / Delete\*\*\* |
 
-\*Field “Rules & Prizes” is only required if visibility = public.  
-\*\*If Odds range is not checked, we assume there are no limits.  
-\*\*\*You can only delete the created contest if the first game has not started yet.  
-\*\*\*\*MVP allows creating leagues for admins only  
-\*\*\*\*\*MVP allows only public type of contests
+*Поле “Rules & Prizes” обязательно только если visibility = public.
+**Если Odds range не отмечен, считаем, что ограничений нет.
+***Вы можете удалить созданный contest только если первая игра ещё не началась.
+****MVP позволяет создавать лиги только для администраторов
+*****MVP позволяет только public тип contests
 
 ---
 
@@ -134,45 +134,45 @@
 
 По клику на “See Tipster Stats” открывается таблица с данными по конкретному типстеру.
 
-See the demo table with example of parameters’ calculations for a single tipster
+[Смотрите демонстрационную таблицу с примером расчётов параметров для одного типстера](https://docs.google.com/spreadsheets/d/1-L8ejXHC8OJ8xQJJhYD706sg9Hf8S9v4kTyrO8R49SQ/edit?gid=1895330063#gid=1895330063)
 
 ---
 
-## Parameters & Calculations
+##Параметры и расчёты
 
-### Points
+###Points
 
-Points are the sum of points for all single tips. Can be zero or higher.
+Points — это сумма points по всем одиночным tips. Может быть 0 или больше.
 
-Users can earn points for a single tip according to the rules specified in the project's settings. The user gets 0 points for lost or void tips.
+Пользователи получают points за один tip согласно правилам, заданным в настройках проекта. За tips со статусом Lost или Void пользователь получает 0 points.
 
-Points calculation for a single tip (example)
+Расчёт points для одного tip (пример)
 
-Winning single tip (probability between 81% - 90%) - 2 points  
-Winning single tip (probability between 71% - 80%) - 4 points  
-Winning single tip (probability between 61% - 70%) - 6 points  
-Winning single tip (probability between 51% - 60%) - 8 points  
+Выигрышный одиночный tip (probability между 81% - 90%) — 2 points
+Выигрышный одиночный tip (probability между 71% - 80%) — 4 points
+Выигрышный одиночный tip (probability между 61% - 70%) — 6 points
+Выигрышный одиночный tip (probability между 51% - 60%) — 8 points
 …
 
-### Profit
+###Profit
 
-Profit = SUM of profit of all single tips. Can be positive, zero or negative.
+Profit = SUM profit по всем одиночным tips. Может быть положительным, нулевым или отрицательным.
 
-Profit of a single tip is calculated the following way:
+Profit одного tip рассчитывается следующим образом:
 
-Each tip costs 100 coins.
+Каждый tip стоит 100 coins.
 
-If the tip wins, returns are calculated (100 coins x Odds - e.g., 100 X 1.45 = 145).
+Если tip выигрывает, возврат рассчитывается так (100 coins x Odds — например, 100 X 1.45 = 145).
 
-If the tip loses, the amount is deducted from the total (-100 coins x Odds - e.g., -100 X 1.45 = -145).
+Если tip проигрывает, сумма вычитается из общего результата (-100 coins x Odds — например, -100 X 1.45 = -145).
 
-If the tip is void or open, it costs zero coins (0 coins x Odds - e.g., 0 X 1.45 = 0).
+Если tip имеет статус Void или Open, он стоит 0 coins (0 coins x Odds — например, 0 X 1.45 = 0).
 
-### YIELD
+###YIELD
 
 YIELD = (P / S) х 100%, где
 
-P – прибыль или убыток (Profit).  
+P – прибыль или убыток (Profit).
 S – сумма ставок (coins).
 
 YIELD показывает, насколько эффективна та или иная стратегия ставок, и на короткой дистанции уже можно видеть прогресс прогнозиста.
@@ -181,23 +181,21 @@ YIELD показывает, насколько эффективна та или 
 
 YIELD = (50 / 2000) х 100% = 2.5%
 
-### WinRate
+###WinRate
 
 WinRate = W / W + L
 
-W - number of tips with status Won  
+W - number of tips with status Won
 L - number of tips with status Lost
 
-We exclude tips with status Void or Open from the calculations.
+Мы исключаем tips со статусом Void или Open из расчётов.
 
----
+##Tip Statuses
 
-## Tip Statuses
+Tip Won - если API возвращает Is Won=true для tip
 
-Tip Won - if API returns Is Won=true for the tip
+Tip Lost - если API возвращает Is Won=false для tip
 
-Tip Lost - if API returns Is Won=false for the tip
+Tip Void - если API возвращает Is Won=void для tip
 
-Tip Void - if API returns Is Won=void for the tip
-
-Tip Open - if game Status=planned
+Tip Open - если game Status=planned
