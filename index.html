@@ -1,0 +1,2273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Predictions Service — Admin Demo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* small helpers */
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div id="app" class="min-h-screen"></div>
+
+<script>
+// --- Demo safety: show JS errors on screen (prevents blank page) ---
+window.addEventListener("error", (e)=>{
+  const app=document.getElementById("app");
+  if(!app) return;
+  app.innerHTML = `
+    <div class="min-h-screen flex items-center justify-center p-6">
+      <div class="max-w-xl w-full rounded-2xl border border-rose-200 bg-rose-50 p-5">
+        <div class="text-lg font-semibold text-rose-900">Demo crashed</div>
+        <div class="mt-2 text-sm text-rose-900/80">Open DevTools → Console for details. Common cause: a broken paste/merge while editing the single HTML file.</div>
+        <pre class="mt-3 whitespace-pre-wrap text-xs bg-white/70 rounded-xl p-3 border border-rose-200 overflow-auto">${(e && (e.error?.stack || e.message)) || "Unknown error"}</pre>
+      </div>
+    </div>`;
+});
+
+/**
+ * Predictions Service — interactive HTML demo (single file, no backend).
+ * Built from the spec:
+ * - Entities: Projects, Contests, Tipsters, Tipster Stats
+ * - Key constraints (enforced in UI):
+ *   Projects:
+ *     - Can edit/delete only if no active contests.
+ *     - Domain/Path editable only if project has zero leagues created.
+ *     - Cannot delete sports if project contains leagues with that sport.
+ *     - Cannot edit Points & Ranges if any game status started/finished exists in project.
+ *   Contests:
+ *     - Search & filters (date range, visibility, sports, league)
+ *     - Rules & Prizes required only if visibility=public (MVP: only public exists, but we keep toggle for demo)
+ *     - Can delete contest only if first game has not started yet.
+ * Tipsters:
+ *   - List of users with at least one prediction
+ *   - Filters & sorts; pagination; total results
+ * Tipster Stats:
+ *   - Shows computed metrics + list of tips
+ *
+ * Demo Controls panel lets you toggle: empty/loading/error, time shift, contest started, etc.
+ */
+
+// ---------- Utilities ----------
+const uid = (() => { let i=1000; return () => String(++i); })();
+const todayISO = () => new Date().toISOString().slice(0,10);
+const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+const fmt = (n) => (Number.isFinite(n) ? n.toFixed(2) : "—");
+const fmtInt = (n) => (Number.isFinite(n) ? Math.round(n).toString() : "—");
+const parseDate = (s) => new Date(s + "T00:00:00");
+const inRangeDate = (d, from, to) => (!from || d >= parseDate(from)) && (!to || d <= parseDate(to));
+const escapeHtml = (str) =>
+  (str ?? "").toString()
+    .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+
+const LEAGUES_BY_SPORT = {
+  Football: ["Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1"],
+  Basketball: ["NBA", "EuroLeague"]
+};
+
+// ---------- Seed data (stub) ----------
+const seed = () => {
+  const projects = [
+    {
+      id: "p1",
+      name: "RatingBet",
+      domain: "ratingbet.com",
+      path: "https://ratingbet.com/predictions/",
+      sports: ["Football"],
+      // ranges: inclusive intervals
+      ranges: [
+        { from: 0,  to: 30,  points: 12 },
+        { from: 31, to: 50,  points: 10 },
+        { from: 51, to: 60,  points: 8 },
+        { from: 61, to: 70,  points: 6 },
+        { from: 71, to: 80,  points: 4 },
+        { from: 81, to: 90,  points: 2 },
+        { from: 91, to: 100, points: 1 },
+      ],
+      meta: {
+        leaguesCreatedCount: 1,
+        hasLeaguesBySport: { Football: true, Basketball: false },
+        // For demo: if any game started/finished exists under this project => lock ranges
+        hasStartedOrFinishedGames: true,
+        // For demo: "active contests" for delete/edit restrictions
+        activeContestsCount: 1,
+      }
+    },
+    {
+      id: "p2",
+      name: "Foot-Africa",
+      domain: "foot-africa.com",
+      path: "https://foot-africa.com/predictions/",
+      sports: ["Football","Basketball"],
+      ranges: [
+        { from: 0,  to: 40,  points: 10 },
+        { from: 41, to: 60,  points: 7 },
+        { from: 61, to: 75,  points: 5 },
+        { from: 76, to: 90,  points: 3 },
+        { from: 91, to: 100, points: 1 },
+      ],
+      meta: {
+        leaguesCreatedCount: 0,
+        hasLeaguesBySport: { Football: false, Basketball: false },
+        hasStartedOrFinishedGames: false,
+        activeContestsCount: 0,
+      }
+    }
+  ];
+
+  const contests = [
+    {
+      id: "c1",
+      projectId: "p1",
+      name: "Premier League: January Sprint",
+      shortDescription: "<p>Pick the best tips from EPL fixtures and win prizes.</p>",
+      rulesPrizes: "<p><b>Prizes:</b> Top 3 by points. Tie-break: profit.</p>",
+      logoUrl: "",
+      startDate: "2026-01-22",
+      finishDate: "2026-01-31",
+      creator: "Admin",
+      visibility: "Public", // MVP allows only public
+      sports: ["Football"],
+      leagues: ["Premier League"],
+      gamesMode: "All games",
+      gamesDate: "2026-01-23",
+      gameIds: [],
+      markets: ["Match Result"],
+      oddsRangeEnabled: true,
+      oddsFrom: 1.10,
+      oddsTo: 10.00,
+      minEligibleTips: 3,
+      rankBy: "Points",
+      meta: {
+        firstGameStarted: true,
+        leaguesCount: 1,
+        tipstersCount: 6,
+      }
+    },
+    {
+      id: "c2",
+      projectId: "p2",
+      name: "NBA Weekend Picks",
+      shortDescription: "<p>Basketball contest for weekend games.</p>",
+      rulesPrizes: "<p><b>Prizes:</b> Bragging rights.</p>",
+      logoUrl: "",
+      startDate: "2026-02-07",
+      finishDate: "2026-02-09",
+      creator: "Admin",
+      visibility: "Public",
+      sports: ["Basketball"],
+      leagues: ["NBA"],
+      gamesMode: "Pick by date",
+      gamesDate: "2026-02-08",
+      gameIds: ["g7","g8"],
+      markets: ["Match Result"],
+      oddsRangeEnabled: false,
+      oddsFrom: 0,
+      oddsTo: 0,
+      minEligibleTips: 0,
+      rankBy: "Points",
+      meta: {
+        firstGameStarted: false,
+        leaguesCount: 1,
+        tipstersCount: 0,
+      }
+    },
+  ];
+
+  // Games catalog (stub) used for contest setup (Pick by date).
+  // In real app, this would come from Sports API by date + leagues.
+  const games = [
+    // Football — 2026-01-23
+    { id:"g1", sport:"Football", league:"Premier League", date:"2026-01-23", home:"Arsenal", away:"Chelsea", status:"Planned" },
+    { id:"g2", sport:"Football", league:"Premier League", date:"2026-01-23", home:"Man City", away:"Spurs", status:"Planned" },
+    { id:"g3", sport:"Football", league:"La Liga",        date:"2026-01-23", home:"Barcelona", away:"Real Madrid", status:"Planned" },
+    { id:"g4", sport:"Football", league:"La Liga",        date:"2026-01-23", home:"Valencia", away:"Sevilla", status:"Planned" },
+
+    // Football — 2026-01-24 (to show filtering by date)
+    { id:"g5", sport:"Football", league:"Premier League", date:"2026-01-24", home:"Liverpool", away:"Everton", status:"Planned" },
+    { id:"g6", sport:"Football", league:"Bundesliga",     date:"2026-01-24", home:"Bayern", away:"Dortmund", status:"Planned" },
+
+    // Basketball — 2026-02-08
+    { id:"g7", sport:"Basketball", league:"NBA",          date:"2026-02-08", home:"Lakers", away:"Warriors", status:"Planned" },
+    { id:"g8", sport:"Basketball", league:"NBA",          date:"2026-02-08", home:"Celtics", away:"Bulls", status:"Planned" },
+    { id:"g9", sport:"Basketball", league:"EuroLeague",   date:"2026-02-08", home:"Real Madrid", away:"Olympiacos", status:"Planned" },
+  ];
+
+  // Tips = single picks. Status derives from spec.
+  // Profit per tip: stake=100
+  // - won: +(100*odds - 100) OR spec says returns=100*odds; but profit definition says "SUM of profit of all single tips" and examples show 100*1.45 = 145 (as "returns").
+  // We'll interpret "Profit" as net change vs 0 baseline for coin balance:
+  // - won: + (100*odds - 100) = +100*(odds-1)
+  // - lost: -100
+  // - void/open: 0
+  // This is common. If you want "profit" to be +/- 100*odds as spec line suggests, flip in calc mode easily.
+  // Demo includes toggle for profit calc mode.
+  const tipsters = [
+    { id:"t1", nickname:"IgorTips", displayName:"IgorTips" },
+    { id:"t2", nickname:"ValueHunter", displayName:"ValueHunter" },
+    { id:"t3", nickname:"SafePick", displayName:"SafePick" },
+    { id:"t4", nickname:"XGWizard", displayName:"XGWizard" },
+    { id:"t5", nickname:"LateTrader", displayName:"LateTrader" },
+    { id:"t6", nickname:"RookieOne", displayName:"RookieOne" },
+  ];
+
+const tips = [
+  // contest c1 (EPL)
+  { id:"tip1", contestId:"c1", tipsterId:"t1", match:"Man City - Spurs",      market:"Match Result", odds:1.55, probability:82, status:"Won",   gameStatus:"Finished" },
+  { id:"tip2", contestId:"c1", tipsterId:"t1", match:"Arsenal - Chelsea",     market:"Match Result", odds:2.10, probability:55, status:"Lost",  gameStatus:"Finished" },
+  { id:"tip3", contestId:"c1", tipsterId:"t1", match:"Liverpool - Everton",   market:"Match Result", odds:1.40, probability:91, status:"Won",   gameStatus:"Finished" },
+  { id:"tip4", contestId:"c1", tipsterId:"t1", match:"Newcastle - Brighton",  market:"Match Result", odds:1.80, probability:68, status:"Void",  gameStatus:"Finished" },
+
+  { id:"tip5", contestId:"c1", tipsterId:"t2", match:"Barcelona - Real Madrid", market:"Match Result", odds:2.60, probability:45, status:"Won",   gameStatus:"Finished" },
+  { id:"tip6", contestId:"c1", tipsterId:"t2", match:"Arsenal - Chelsea",       market:"Match Result", odds:1.72, probability:74, status:"Lost",  gameStatus:"Finished" },
+  { id:"tip7", contestId:"c1", tipsterId:"t2", match:"PSG - Lyon",              market:"Match Result", odds:1.33, probability:92, status:"Won",   gameStatus:"Finished" },
+
+  { id:"tip8", contestId:"c1", tipsterId:"t3", match:"Inter - Milan",         market:"Match Result", odds:1.25, probability:93, status:"Won",   gameStatus:"Finished" },
+  { id:"tip9", contestId:"c1", tipsterId:"t3", match:"Roma - Lazio",          market:"Match Result", odds:1.95, probability:63, status:"Won",   gameStatus:"Finished" },
+  { id:"tip10",contestId:"c1", tipsterId:"t3", match:"Valencia - Sevilla",    market:"Match Result", odds:2.20, probability:52, status:"Open",  gameStatus:"Planned" },
+
+  { id:"tip11",contestId:"c1", tipsterId:"t4", match:"Benfica - Porto",       market:"Match Result", odds:1.66, probability:79, status:"Lost",  gameStatus:"Finished" },
+  { id:"tip12",contestId:"c1", tipsterId:"t4", match:"Ajax - PSV",            market:"Match Result", odds:2.90, probability:38, status:"Lost",  gameStatus:"Finished" },
+
+  { id:"tip13",contestId:"c1", tipsterId:"t5", match:"Bayern - Dortmund",     market:"Match Result", odds:1.50, probability:84, status:"Won",   gameStatus:"Finished" },
+  { id:"tip14",contestId:"c1", tipsterId:"t5", match:"Leipzig - Leverkusen",  market:"Match Result", odds:1.90, probability:62, status:"Won",   gameStatus:"Finished" },
+  { id:"tip15",contestId:"c1", tipsterId:"t5", match:"Monaco - Marseille",    market:"Match Result", odds:2.05, probability:58, status:"Lost",  gameStatus:"Finished" },
+  { id:"tip16",contestId:"c1", tipsterId:"t6", match:"Sporting - Braga",      market:"Match Result", odds:3.10, probability:33, status:"Lost",  gameStatus:"Finished" },
+
+  // contest c2 (NBA)
+];
+
+  return { projects, contests, games, tipsters, tips };
+};
+
+// ---------- App State ----------
+const state = {
+  route: { name: "projects", params: {} }, // projects | contests | tipsters | tipsterStats
+  demo: {
+    apiMode: "ok", // ok | loading | error | empty
+    // if true, treat "now" as shifted into contest timeline so deletes lock etc.
+    now: todayISO(),
+    // profit calc mode:
+    // "net": won=100*(odds-1), lost=-100, void/open=0
+    // "grossSigned": won=+100*odds, lost=-100*odds, void/open=0 (matches spec example line)
+    profitMode: "net",
+  },
+  data: seed(),
+  ui: {
+    toast: null,
+    modal: null, // {type, ...}
+  },
+  filters: {
+    contests: {
+      q: "",
+      dateFrom: "",
+      dateTo: "",
+      visibility: "All",
+      sport: "All",
+      league: "All",
+      project: "All",
+    },
+    tipsters: {
+      q: "",
+      contest: "All",
+      year: "All",
+      yearMonth: "All",
+      visibility: "All",
+      sport: "All",
+      league: "All",
+      lastXTips: 20,
+      sortBy: "Points",
+      sortDir: "desc",
+      page: 1,
+      pageSize: 20,
+    }
+  },
+  draft: null, // form draft for Project/Contest
+};
+
+// ---------- Derived calculations ----------
+function getProjectById(id){ return state.data.projects.find(p=>p.id===id); }
+function getContestById(id){ return state.data.contests.find(c=>c.id===id); }
+function getTipsterById(id){ return state.data.tipsters.find(t=>t.id===id); }
+
+function getGameById(id){ return state.data.games.find(g=>g.id===id); }
+function gameLabel(g){ return `${g.home} - ${g.away}`; }
+
+// Available games for contest draft when gamesMode = "Pick by date"
+function getAvailableGamesForDraft(d){
+  if (!d || d.gamesMode !== "Pick by date") return [];
+  const date = d.gamesDate;
+  const leagues = new Set(d.leagues || []);
+  const sports = new Set(d.sports || []);
+  return (state.data.games || [])
+    .filter(g => (!date || g.date === date))
+    .filter(g => (sports.size===0 || sports.has(g.sport)))
+    .filter(g => (leagues.size===0 || leagues.has(g.league)))
+    .sort((a,b)=> (a.league.localeCompare(b.league) || gameLabel(a).localeCompare(gameLabel(b))));
+}
+
+function pointsForProbability(project, prob){
+  const r = project.ranges.find(x => prob >= x.from && prob <= x.to);
+  return r ? r.points : 0;
+}
+
+function profitForTip(tip){
+  const stake = 100;
+  if (tip.status === "Void" || tip.status === "Open") return 0;
+  if (state.demo.profitMode === "grossSigned") {
+    // matches the spec line: +100*odds for win; -100*odds for lose
+    return tip.status === "Won" ? stake * tip.odds : -stake * tip.odds;
+  }
+  // net
+  if (tip.status === "Won") return stake * (tip.odds - 1);
+  if (tip.status === "Lost") return -stake;
+  return 0;
+}
+
+function sumStakeForYield(tips){
+  // Use only tips with status Won/Lost (void/open excluded) since stake effectively applied
+  const stake = 100;
+  const n = tips.filter(t => t.status==="Won" || t.status==="Lost").length;
+  return n * stake;
+}
+
+function calcTipsterMetrics({ tipsterId, tips, projectId }){
+  const project = getProjectById(projectId);
+  const myTips = tips.filter(t => t.tipsterId===tipsterId);
+  const won = myTips.filter(t=>t.status==="Won").length;
+  const lost = myTips.filter(t=>t.status==="Lost").length;
+  const voided = myTips.filter(t=>t.status==="Void").length;
+  const open = myTips.filter(t=>t.status==="Open").length;
+
+  const points = myTips.reduce((acc, t) => {
+    if (t.status !== "Won") return acc;
+    return acc + pointsForProbability(project, t.probability);
+  }, 0);
+
+  const profit = myTips.reduce((acc,t)=>acc+profitForTip(t),0);
+  const stakeSum = sumStakeForYield(myTips);
+  const yieldPct = stakeSum > 0 ? (profit / stakeSum) * 100 : 0;
+
+  const avgOdds = (myTips.length>0) ? myTips.reduce((a,t)=>a+t.odds,0)/myTips.length : 0;
+  const winRate = (won + lost) > 0 ? (won / (won + lost)) * 100 : 0;
+
+  return {
+    points,
+    profit,
+    yieldPct,
+    avgOdds,
+    winRate,
+    total: myTips.length,
+    won, lost, voided, open
+  };
+}
+
+// Tipsters table is scoped by filters; "users who made at least one prediction"
+function getTipstersTableRows(){
+  const { contests, tips } = state.data;
+  let filteredTips = tips.slice();
+
+  const f = state.filters.tipsters;
+
+  // Contest filter
+  if (f.contest !== "All") filteredTips = filteredTips.filter(t => t.contestId === f.contest);
+
+  // Visibility/sport/league derived from contest
+  const contestById = Object.fromEntries(contests.map(c=>[c.id,c]));
+  if (f.visibility !== "All") filteredTips = filteredTips.filter(t => contestById[t.contestId]?.visibility === f.visibility);
+  if (f.sport !== "All") filteredTips = filteredTips.filter(t => contestById[t.contestId]?.sport === f.sport);
+  if (f.league !== "All") filteredTips = filteredTips.filter(t => contestById[t.contestId]?.league === f.league);
+
+  // last X tips (per tipster) — simplistic: take latest by tip id ordering
+  const lastX = clamp(Number(f.lastXTips)||20, 1, 200);
+  const byTipster = new Map();
+  for (const t of filteredTips) {
+    const arr = byTipster.get(t.tipsterId) || [];
+    arr.push(t);
+    byTipster.set(t.tipsterId, arr);
+  }
+  for (const [k, arr] of byTipster.entries()) {
+    // pretend tip id order ~ time
+    arr.sort((a,b)=>a.id.localeCompare(b.id));
+    byTipster.set(k, arr.slice(-lastX));
+  }
+
+  // Search nickname
+  let tipsters = state.data.tipsters.slice();
+  if (f.q.trim()) {
+    const q = f.q.trim().toLowerCase();
+    tipsters = tipsters.filter(t => (t.nickname||"").toLowerCase().includes(q));
+  }
+
+  // Only show tipsters with >=1 tip after all filters
+  const rows = [];
+  for (const t of tipsters) {
+    const myTips = byTipster.get(t.id) || [];
+    if (myTips.length === 0) continue;
+
+    // pick a projectId for points rule: contests belong to projects; assume filter by contest narrows.
+    // If multiple contests/projects present, we compute metrics per contest's project and sum.
+    // For demo: we compute by grouping per contest.projectId then sum.
+    const groups = new Map();
+    for (const tip of myTips) {
+      const c = contestById[tip.contestId];
+      if (!c) continue;
+      const g = groups.get(c.projectId) || [];
+      g.push(tip);
+      groups.set(c.projectId, g);
+    }
+
+    let metrics = {
+      points: 0, profit: 0, yieldPct: 0, avgOdds: 0, winRate: 0,
+      total: 0, won: 0, lost: 0, voided: 0, open: 0,
+      _avgOddsSum: 0,
+      _winRateWon: 0, _winRateLost: 0,
+      _stakeSum: 0,
+    };
+
+    let tipsCountForAvg = 0;
+    for (const [projectId, tipsArr] of groups.entries()) {
+      const m = calcTipsterMetrics({ tipsterId: t.id, tips: tipsArr, projectId });
+      metrics.points += m.points;
+      metrics.profit += m.profit;
+      metrics.total += m.total;
+      metrics.won += m.won;
+      metrics.lost += m.lost;
+      metrics.voided += m.voided;
+      metrics.open += m.open;
+
+      metrics._avgOddsSum += m.avgOdds * m.total;
+      tipsCountForAvg += m.total;
+
+      // recompute aggregate winrate properly later
+      metrics._winRateWon += m.won;
+      metrics._winRateLost += m.lost;
+
+      metrics._stakeSum += sumStakeForYield(tipsArr);
+    }
+
+    metrics.avgOdds = tipsCountForAvg > 0 ? metrics._avgOddsSum / tipsCountForAvg : 0;
+    metrics.winRate = (metrics._winRateWon + metrics._winRateLost) > 0
+      ? (metrics._winRateWon / (metrics._winRateWon + metrics._winRateLost)) * 100
+      : 0;
+    metrics.yieldPct = metrics._stakeSum > 0 ? (metrics.profit / metrics._stakeSum) * 100 : 0;
+
+    rows.push({ tipster: t, metrics });
+  }
+
+  // Sort
+  const key = f.sortBy;
+  const dir = f.sortDir === "asc" ? 1 : -1;
+  rows.sort((a,b)=>{
+    const A = metricKey(a.metrics, key);
+    const B = metricKey(b.metrics, key);
+    if (A < B) return -1*dir;
+    if (A > B) return 1*dir;
+    return a.tipster.nickname.localeCompare(b.tipster.nickname);
+  });
+
+  // Pagination
+  const total = rows.length;
+  const pageSize = clamp(Number(f.pageSize)||20, 20, 100);
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const page = clamp(Number(f.page)||1, 1, pages);
+  state.filters.tipsters.page = page;
+
+  const start = (page-1)*pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+
+  return { pageRows, total, pages, page, pageSize };
+}
+
+function metricKey(m, key){
+  switch(key){
+    case "Points": return m.points;
+    case "Profit": return m.profit;
+    case "Yield": return m.yieldPct;
+    case "WinRate": return m.winRate;
+    default: return m.points;
+  }
+}
+
+// ---------- UI helpers ----------
+function setRoute(name, params = {}) {
+  state.route = { name, params };
+  state.ui.toast = null;
+  state.draft = null;
+  render();
+}
+function toast(msg, type="info"){
+  state.ui.toast = { msg, type, ts: Date.now() };
+  render();
+  setTimeout(()=>{ if (state.ui.toast && Date.now()-state.ui.toast.ts>2500){ state.ui.toast=null; render(); } }, 2600);
+}
+function openModal(modal){ state.ui.modal = modal; render(); }
+function closeModal(){ state.ui.modal = null; render(); }
+
+function apiGate(renderOk){
+  const mode = state.demo.apiMode;
+  if (mode === "loading") return skeletonPage();
+  if (mode === "error") return errorPage();
+  if (mode === "empty") return emptyPage();
+  return renderOk();
+}
+
+// ---------- Rendering ----------
+function render(){
+  const root = document.getElementById("app");
+  root.innerHTML = layout({
+    content: apiGate(() => {
+      switch(state.route.name){
+        case "projects": return viewProjects();
+        case "projectEdit": return viewProjectEdit(state.route.params.projectId);
+        case "contests": return viewContests();
+        case "contestEdit": return viewContestEdit(state.route.params.contestId);
+        case "tipsters": return viewTipsters();
+        case "tipsterStats": return viewTipsterStats(state.route.params.tipsterId);
+        default: return viewProjects();
+      }
+    }),
+  });
+
+  // attach listeners after re-render
+  bindCommonListeners();
+  bindViewListeners();
+}
+
+// ---------- Layout / chrome ----------
+function layout({ content }){
+  return `
+  <div class="mx-auto max-w-[1400px] px-4 py-6">
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-start">
+      <!-- Main -->
+      <div class="flex-1">
+        ${topbar()}
+        <div class="mt-4">${content}</div>
+      </div>
+
+      <!-- Demo Controls -->
+      <aside class="w-full lg:w-[360px] lg:sticky lg:top-6">
+        ${demoControls()}
+      </aside>
+    </div>
+
+    ${toastUI()}
+    ${modalUI()}
+    <div class="mt-10 text-xs text-slate-500">
+      <div class="mono">Demo notes:</div>
+      <ul class="list-disc pl-5 mt-2 space-y-1">
+        <li>All data is stubbed in-memory. No backend calls.</li>
+        <li>Toggle <span class="mono">API Mode</span> to test loading/empty/error states.</li>
+        <li>Some constraints are intentionally enforced with clear lock reasons.</li>
+      </ul>
+    </div>
+  </div>`;
+}
+
+function topbar(){
+  const r = state.route.name;
+  const active = (x) => x===r ? "bg-slate-900 text-white" : "bg-white text-slate-900 hover:bg-slate-100 border border-slate-200";
+  return `
+    <div class="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
+      <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div class="text-lg font-semibold">Predictions Service — Admin Panel (Demo)</div>
+          <div class="text-sm text-slate-500">Projects • Contests • Tipsters • Stats</div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button data-nav="projects" class="px-3 py-2 rounded-xl text-sm ${active("projects")}">Projects</button>
+          <button data-nav="contests" class="px-3 py-2 rounded-xl text-sm ${active("contests")}">Contests</button>
+          <button data-nav="tipsters" class="px-3 py-2 rounded-xl text-sm ${active("tipsters")}">Tipsters</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function demoControls(){
+  const { apiMode, now, profitMode } = state.demo;
+  return `
+  <div class="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
+    <div class="flex items-center justify-between">
+      <div class="font-semibold">Demo Controls</div>
+      <span class="text-xs text-slate-500 mono">local</span>
+    </div>
+
+    <div class="mt-4 space-y-4">
+      <div>
+        <label class="text-xs font-medium text-slate-600">API Mode</label>
+        <div class="mt-2 grid grid-cols-4 gap-2">
+          ${["ok","loading","error","empty"].map(m => `
+            <button data-demomode="${m}" class="px-2 py-2 rounded-xl text-xs border ${apiMode===m ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"}">${m}</button>
+          `).join("")}
+        </div>
+      </div>
+
+      <div>
+        <label class="text-xs font-medium text-slate-600">“Today” (affects delete locks)</label>
+        <div class="mt-2 flex gap-2">
+          <input id="demoNow" type="date" value="${escapeHtml(now)}" class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+          <button id="demoNowToday" class="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">Today</button>
+        </div>
+        <div class="mt-1 text-xs text-slate-500">
+          Contest delete is blocked if first game started.
+        </div>
+      </div>
+
+      <div>
+        <label class="text-xs font-medium text-slate-600">Profit calculation</label>
+        <div class="mt-2 flex gap-2">
+          <button data-profitmode="net" class="flex-1 rounded-xl border px-3 py-2 text-xs ${profitMode==="net" ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"}">
+            net (won: 100*(odds-1))
+          </button>
+          <button data-profitmode="grossSigned" class="flex-1 rounded-xl border px-3 py-2 text-xs ${profitMode==="grossSigned" ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"}">
+            grossSigned (±100*odds)
+          </button>
+        </div>
+      </div>
+
+      <div class="rounded-xl bg-slate-50 border border-slate-200 p-3">
+        <div class="text-xs font-medium text-slate-600">Quick jumps</div>
+        <div class="mt-2 flex flex-wrap gap-2">
+          <button data-nav="projectEdit" data-projectid="p2" class="px-3 py-2 rounded-xl text-xs border border-slate-200 bg-white hover:bg-slate-50">Edit Project (unlocked)</button>
+          <button data-nav="projectEdit" data-projectid="p1" class="px-3 py-2 rounded-xl text-xs border border-slate-200 bg-white hover:bg-slate-50">Edit Project (locked)</button>
+          <button data-nav="contestEdit" data-contestid="c2" class="px-3 py-2 rounded-xl text-xs border border-slate-200 bg-white hover:bg-slate-50">Edit Contest (future)</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function toastUI(){
+  if (!state.ui.toast) return "";
+  const { msg, type } = state.ui.toast;
+  const cls = type==="error" ? "bg-rose-600" : type==="success" ? "bg-emerald-600" : "bg-slate-900";
+  return `
+    <div class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
+      <div class="${cls} text-white px-4 py-3 rounded-2xl shadow-lg text-sm">
+        ${escapeHtml(msg)}
+      </div>
+    </div>`;
+}
+
+function modalUI(){
+  const m = state.ui.modal;
+  if (!m) return "";
+  return `
+    <div class="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4" data-modalbg="1">
+      <div class="w-full max-w-2xl rounded-2xl bg-white shadow-xl border border-slate-200 overflow-hidden">
+        <div class="p-4 border-b border-slate-200 flex items-center justify-between">
+          <div class="font-semibold">${escapeHtml(m.title || "Confirm")}</div>
+          <button data-modalclose="1" class="rounded-xl px-2 py-1 hover:bg-slate-100">✕</button>
+        </div>
+        <div class="p-4">
+          ${m.bodyHtml || ""}
+          <div class="mt-4 flex justify-end gap-2">
+            <button data-modalclose="1" class="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50">Cancel</button>
+            <button data-modalconfirm="1" class="px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">${escapeHtml(m.confirmText || "Confirm")}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Generic states ----------
+function skeletonPage(){
+  return `
+  <div class="rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
+    <div class="animate-pulse space-y-4">
+      <div class="h-6 w-48 bg-slate-200 rounded"></div>
+      <div class="h-4 w-72 bg-slate-200 rounded"></div>
+      <div class="h-10 w-full bg-slate-200 rounded-xl"></div>
+      <div class="h-56 w-full bg-slate-200 rounded-xl"></div>
+    </div>
+  </div>`;
+}
+function errorPage(){
+  return `
+  <div class="rounded-2xl bg-white shadow-sm border border-rose-200 p-6">
+    <div class="flex items-start gap-3">
+      <div class="text-rose-600 text-xl">⚠️</div>
+      <div>
+        <div class="font-semibold">API error (simulated)</div>
+        <div class="text-sm text-slate-600 mt-1">Show a retry UI, log details, keep user inputs.</div>
+        <button id="retryApi" class="mt-4 px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">Retry</button>
+      </div>
+    </div>
+  </div>`;
+}
+function emptyPage(){
+  return `
+  <div class="rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
+    <div class="flex items-start gap-3">
+      <div class="text-slate-700 text-xl">🗂️</div>
+      <div>
+        <div class="font-semibold">No data (simulated)</div>
+        <div class="text-sm text-slate-600 mt-1">Empty state should explain what to do next.</div>
+        <button data-nav="projects" class="mt-4 px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">Go to Projects</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---------- Views ----------
+function card({ title, subtitle, rightHtml="", bodyHtml="" }){
+  return `
+    <div class="rounded-2xl bg-white shadow-sm border border-slate-200">
+      <div class="p-4 border-b border-slate-200 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div class="font-semibold">${escapeHtml(title)}</div>
+          ${subtitle ? `<div class="text-sm text-slate-500 mt-0.5">${subtitle}</div>` : ""}
+        </div>
+        ${rightHtml}
+      </div>
+      <div class="p-4">${bodyHtml}</div>
+    </div>
+  `;
+}
+
+// ---- Projects List ----
+function viewProjects(){
+  const projects = state.data.projects;
+  const rows = projects.map(p=>{
+    const canEditDelete = p.meta.activeContestsCount === 0;
+    return `
+      <tr class="border-t border-slate-100">
+        <td class="py-3 pr-3">
+          <div class="font-medium">${escapeHtml(p.name)}</div>
+          <div class="text-xs text-slate-500 mono">${escapeHtml(p.id)}</div>
+        </td>
+        <td class="py-3 pr-3 mono text-sm">${escapeHtml(p.domain)}</td>
+        <td class="py-3 pr-3 mono text-sm">${escapeHtml(p.path)}</td>
+        <td class="py-3 pr-3 text-sm">${p.sports.map(s=>badge(s)).join(" ")}</td>
+        <td class="py-3 pr-3 text-sm">
+          ${badge(`${p.meta.activeContestsCount} active contests`, p.meta.activeContestsCount>0 ? "rose" : "slate")}
+        </td>
+        <td class="py-3 pr-3 text-sm text-right">
+          <div class="flex justify-end gap-2">
+            <button data-nav="projectEdit" data-projectid="${p.id}" class="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50">Edit</button>
+            <button data-projectdelete="${p.id}" class="px-3 py-2 rounded-xl border ${canEditDelete ? "border-rose-200 text-rose-700 hover:bg-rose-50" : "border-slate-200 text-slate-400 cursor-not-allowed"}"
+              ${canEditDelete ? "" : "disabled"}
+              title="${canEditDelete ? "Delete project" : "Blocked: project has active contests"}"
+            >Delete</button>
+          </div>
+          ${!canEditDelete ? `<div class="mt-1 text-xs text-slate-400">Blocked: active contests exist</div>` : ""}
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  return card({
+    title: "Projects",
+    subtitle: "Multi-client setup: each contest is bound to a project (domain).",
+    rightHtml: `<button data-projectadd="1" class="px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">Add New Project</button>`,
+    bodyHtml: `
+      <div class="overflow-auto">
+        <table class="w-full min-w-[900px] text-left">
+          <thead class="text-xs text-slate-500 uppercase">
+            <tr>
+              <th class="py-2 pr-3">Name</th>
+              <th class="py-2 pr-3">Domain</th>
+              <th class="py-2 pr-3">Path</th>
+              <th class="py-2 pr-3">Sports</th>
+              <th class="py-2 pr-3">Status</th>
+              <th class="py-2 pr-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm text-slate-700">
+        <div class="font-medium">Rules enforced (from spec)</div>
+        <ul class="list-disc pl-5 mt-2 space-y-1 text-sm">
+          <li>Edit/Delete project only if it has <b>0 active contests</b>.</li>
+          <li>Domain/Path editable only if project has <b>0 leagues created</b>.</li>
+          <li>Sports cannot be removed if leagues exist for that sport.</li>
+          <li>Points & Ranges locked if any game has status <b>started</b> or <b>finished</b> under this project.</li>
+        </ul>
+      </div>
+    `
+  });
+}
+
+function badge(text, tone="slate"){
+  const map = {
+    slate:"bg-slate-100 text-slate-700 border-slate-200",
+    emerald:"bg-emerald-50 text-emerald-700 border-emerald-200",
+    rose:"bg-rose-50 text-rose-700 border-rose-200",
+    amber:"bg-amber-50 text-amber-800 border-amber-200",
+    sky:"bg-sky-50 text-sky-700 border-sky-200",
+  };
+  const cls = map[tone] || map.slate;
+  return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border ${cls}">${escapeHtml(text)}</span>`;
+}
+
+// ---- Project Add/Edit ----
+function viewProjectEdit(projectId){
+  const isNew = !projectId;
+  const project = isNew ? null : getProjectById(projectId);
+
+  if (!state.draft) {
+    state.draft = isNew ? {
+      id: "new",
+      name: "",
+      domain: "",
+      path: "",
+      sports: ["Football"],
+      ranges: [
+        { from: 0, to: 30, points: 12 },
+        { from: 31, to: 50, points: 10 },
+        { from: 51, to: 60, points: 8 },
+        { from: 61, to: 70, points: 6 },
+        { from: 71, to: 80, points: 4 },
+        { from: 81, to: 90, points: 2 },
+        { from: 91, to: 100, points: 1 },
+      ],
+    } : JSON.parse(JSON.stringify(project));
+  }
+
+  const d = state.draft;
+  // NOTE: game selection helpers belong to Contest Add/Edit, not Project Add/Edit
+
+  const meta = project?.meta || { leaguesCreatedCount:0, hasLeaguesBySport:{Football:false,Basketball:false}, hasStartedOrFinishedGames:false, activeContestsCount:0 };
+
+  const lockDomainPath = !isNew && meta.leaguesCreatedCount > 0;
+  const lockRanges = !isNew && meta.hasStartedOrFinishedGames;
+  const lockDelete = !isNew && meta.activeContestsCount > 0;
+
+  return `
+    ${breadcrumb([
+      { label:"Projects", nav:"projects" },
+      { label: isNew ? "Add Project" : `Edit Project: ${project.name}` },
+    ])}
+
+    ${card({
+      title: isNew ? "Add New Project" : "Edit Project",
+      subtitle: !isNew ? `Project ID: <span class="mono">${escapeHtml(project.id)}</span>` : "Create a new project (domain + path) to host contests.",
+      rightHtml: `
+        <div class="flex gap-2">
+          <button data-nav="projects" class="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50">Back</button>
+          ${!isNew ? `
+            <button data-projectdelete="${project.id}" class="px-4 py-2 rounded-xl border ${lockDelete ? "border-slate-200 text-slate-400 cursor-not-allowed" : "border-rose-200 text-rose-700 hover:bg-rose-50"}"
+              ${lockDelete ? "disabled" : ""}
+              title="${lockDelete ? "Blocked: active contests exist" : "Delete project"}"
+            >Delete</button>` : ""}
+          <button data-projectsave="${isNew ? "new" : project.id}" class="px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">Save Project</button>
+        </div>
+      `,
+      bodyHtml: `
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          ${fieldText("Name", "proj_name", d.name, "Min 3 chars")}
+          ${fieldText("Domain", "proj_domain", d.domain, "Min 3 chars", lockDomainPath, lockDomainPath ? "Locked: project already has leagues" : "")}
+          ${fieldText("Path", "proj_path", d.path, "https://domain.com/predictions/ or https://tips.domain.com/", lockDomainPath, lockDomainPath ? "Locked: project already has leagues" : "")}
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <div class="text-xs font-medium text-slate-600">Sports (multi-select)</div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              ${["Football","Basketball"].map(s=>{
+                const checked = d.sports.includes(s);
+                const lockedRemove = !isNew && checked && meta.hasLeaguesBySport[s];
+                return `
+                  <button data-sporttoggle="${s}"
+                    class="px-3 py-2 rounded-xl text-sm border ${checked ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"}"
+                    ${lockedRemove ? 'data-lockedremove="1" title="Cannot remove: leagues exist for this sport"' : ""}
+                  >${s}${lockedRemove ? " 🔒" : ""}</button>
+                `;
+              }).join("")}
+            </div>
+            <div class="mt-2 text-xs text-slate-500">
+              ${!isNew ? "Cannot delete sports if project already contains leagues with the selected sport." : "Select which sports this project supports."}
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-xs font-medium text-slate-600">Points & Ranges</div>
+                <div class="mt-1 text-xs text-slate-500">
+                  Points awarded for a <b>winning</b> tip based on probability range. Lost/Void/Open ⇒ 0 points.
+                </div>
+              </div>
+              ${lockRanges ? `<div class="text-xs text-slate-500">${badge("Locked: started/finished games exist", "amber")}</div>` : ""}
+            </div>
+
+            <div class="mt-3 overflow-auto">
+              <table class="w-full min-w-[700px] text-left">
+                <thead class="text-xs text-slate-500 uppercase">
+                  <tr>
+                    <th class="py-2 pr-3">Probability from %</th>
+                    <th class="py-2 pr-3">Probability to %</th>
+                    <th class="py-2 pr-3">Points</th>
+                    <th class="py-2 pr-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${d.ranges.map((r, idx)=>`
+                    <tr class="border-t border-slate-100">
+                      <td class="py-2 pr-3">
+                        <input data-rangefrom="${idx}" type="number" min="0" max="100" value="${r.from}"
+                          class="w-28 rounded-xl border border-slate-200 px-3 py-2 text-sm ${lockRanges ? "bg-slate-100" : ""}"
+                          ${lockRanges ? "disabled" : ""}/>
+                      </td>
+                      <td class="py-2 pr-3">
+                        <input data-rangeto="${idx}" type="number" min="0" max="100" value="${r.to}"
+                          class="w-28 rounded-xl border border-slate-200 px-3 py-2 text-sm ${lockRanges ? "bg-slate-100" : ""}"
+                          ${lockRanges ? "disabled" : ""}/>
+                      </td>
+                      <td class="py-2 pr-3">
+                        <input data-rangepoints="${idx}" type="number" min="0" max="999" value="${r.points}"
+                          class="w-28 rounded-xl border border-slate-200 px-3 py-2 text-sm ${lockRanges ? "bg-slate-100" : ""}"
+                          ${lockRanges ? "disabled" : ""}/>
+                      </td>
+                      <td class="py-2 pr-3 text-right">
+                        <button data-rangedelete="${idx}"
+                          class="px-3 py-2 rounded-xl border ${lockRanges ? "border-slate-200 text-slate-400 cursor-not-allowed" : "border-rose-200 text-rose-700 hover:bg-rose-50"}"
+                          ${lockRanges ? "disabled" : ""}>Delete</button>
+                      </td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="mt-3 flex items-center justify-between">
+              <button data-rangeadd="1" class="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 ${lockRanges ? "opacity-40 cursor-not-allowed" : ""}" ${lockRanges ? "disabled":""}>+ Add Range</button>
+              <div class="text-xs text-slate-500">
+                Validation: ranges should cover 0..100 without overlaps. (Demo highlights issues on Save.)
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm">
+          <div class="font-medium">Spec locks shown here</div>
+          <ul class="list-disc pl-5 mt-2 space-y-1">
+            <li><b>Domain/Path</b>: editable only if project has <b>0 leagues created</b>. ${!isNew ? (lockDomainPath ? badge("Locked", "amber") : badge("Editable", "emerald")) : ""}</li>
+            <li><b>Sports</b>: cannot remove a sport if leagues already exist for that sport.</li>
+            <li><b>Points & Ranges</b>: cannot edit if any game started/finished under this project. ${!isNew ? (lockRanges ? badge("Locked", "amber") : badge("Editable", "emerald")) : ""}</li>
+          </ul>
+        </div>
+      `
+    })}
+  `;
+}
+
+function fieldText(label, id, value, help="", disabled=false, lockReason=""){
+  return `
+    <div class="rounded-xl border border-slate-200 p-3">
+      <div class="flex items-center justify-between">
+        <label class="text-xs font-medium text-slate-600" for="${id}">${escapeHtml(label)}</label>
+        ${disabled ? `<span class="text-xs text-slate-500">${badge("Locked", "amber")}</span>` : ""}
+      </div>
+      <input id="${id}" type="text" value="${escapeHtml(value||"")}"
+        class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm ${disabled ? "bg-slate-100" : ""}"
+        ${disabled ? "disabled" : ""}/>
+      <div class="mt-1 text-xs text-slate-500">${escapeHtml(help)} ${lockReason ? `<span class="text-amber-700">(${escapeHtml(lockReason)})</span>` : ""}</div>
+    </div>
+  `;
+}
+
+function breadcrumb(items){
+  return `
+    <div class="mb-4 text-sm text-slate-600 flex flex-wrap items-center gap-2">
+      ${items.map((it, idx)=>`
+        ${idx>0 ? `<span class="text-slate-400">/</span>` : ""}
+        ${it.nav ? `<button data-nav="${it.nav}" class="hover:underline">${escapeHtml(it.label)}</button>` : `<span class="text-slate-900 font-medium">${escapeHtml(it.label)}</span>`}
+      `).join("")}
+    </div>
+  `;
+}
+
+// ---- Contests List ----
+function viewContests(){
+  const f = state.filters.contests;
+  const contests = state.data.contests.slice();
+
+  // Filter
+  let filtered = contests.filter(c=>{
+    if (f.project !== "All" && c.projectId !== f.project) return false;
+    if (f.q.trim() && !c.name.toLowerCase().includes(f.q.trim().toLowerCase())) return false;
+    if (f.visibility !== "All" && c.visibility !== f.visibility) return false;
+    if (f.sport !== "All" && !(c.sports || []).includes(f.sport)) return false;
+    if (f.league !== "All" && !(c.leagues || []).includes(f.league)) return false;
+    const start = parseDate(c.startDate);
+    const finish = parseDate(c.finishDate);
+    if (!inRangeDate(start, f.dateFrom, f.dateTo) && !inRangeDate(finish, f.dateFrom, f.dateTo)) {
+      // naive range match
+      if (f.dateFrom || f.dateTo) return false;
+    }
+    return true;
+  });
+
+  const projectOptions = [{id:"All", name:"All projects"}].concat(state.data.projects.map(p=>({id:p.id, name:p.name})));
+  const leagues = Array.from(new Set(state.data.contests.flatMap(c => c.leagues || []))).sort();
+
+  const rows = filtered.map(c=>{
+    const canDelete = !c.meta.firstGameStarted;
+    const proj = getProjectById(c.projectId);
+    return `
+      <tr class="border-t border-slate-100">
+        <td class="py-3 pr-3">
+          <div class="font-medium">${escapeHtml(c.name)}</div>
+          <div class="text-xs text-slate-500">${escapeHtml(proj?.name || "—")}</div>
+        </td>
+        <td class="py-3 pr-3 mono text-sm">${escapeHtml(c.startDate)}</td>
+        <td class="py-3 pr-3 mono text-sm">${escapeHtml(c.finishDate)}</td>
+        <td class="py-3 pr-3 text-sm">${badge(c.visibility, c.visibility==="Public"?"emerald":"slate")}</td>
+        <td class="py-3 pr-3 text-sm">${(c.sports || []).map(s => badge(s, "sky")).join(" ")}</td>
+        <td class="py-3 pr-3 text-sm">${badge(String(c.meta.leaguesCount), "slate")}</td>
+        <td class="py-3 pr-3 text-sm">
+          <button data-nav="tipsters" data-tipsterscontest="${c.id}" class="underline decoration-slate-300 hover:decoration-slate-700">
+            ${escapeHtml(String(c.meta.tipstersCount))}
+          </button>
+        </td>
+        <td class="py-3 pr-3 text-right">
+          <div class="flex justify-end gap-2">
+            <button data-nav="contestEdit" data-contestid="${c.id}" class="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50">Edit</button>
+            <button data-contestdelete="${c.id}" class="px-3 py-2 rounded-xl border ${canDelete ? "border-rose-200 text-rose-700 hover:bg-rose-50" : "border-slate-200 text-slate-400 cursor-not-allowed"}"
+              ${canDelete ? "" : "disabled"}
+              title="${canDelete ? "Delete contest" : "Blocked: first game has started"}"
+            >Delete</button>
+          </div>
+          ${!canDelete ? `<div class="mt-1 text-xs text-slate-400">Blocked: first game started</div>` : ""}
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  return card({
+    title: "Contests",
+    subtitle: "Search and filter contests. Create new contest.",
+    rightHtml: `<button data-contestadd="1" class="px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">Add New Contest</button>`,
+    bodyHtml: `
+      <div class="grid grid-cols-1 lg:grid-cols-6 gap-3">
+        <div class="lg:col-span-2">
+          <label class="text-xs font-medium text-slate-600">Search by name</label>
+          <input id="contest_q" type="text" value="${escapeHtml(f.q)}" placeholder="e.g., Premier League"
+            class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Project</label>
+          <select id="contest_project" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            ${projectOptions.map(o=>`<option value="${o.id}" ${f.project===o.id?"selected":""}>${escapeHtml(o.name)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Visibility</label>
+          <select id="contest_visibility" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            ${["All","Public","Private"].map(v=>`<option ${f.visibility===v?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Sport</label>
+          <select id="contest_sport" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            ${["All","Football","Basketball"].map(v=>`<option ${f.sport===v?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">League</label>
+          <select id="contest_league" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            <option ${f.league==="All"?"selected":""}>All</option>
+            ${leagues.map(l=>`<option ${f.league===l?"selected":""}>${escapeHtml(l)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Date from</label>
+          <input id="contest_from" type="date" value="${escapeHtml(f.dateFrom)}"
+            class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Date to</label>
+          <input id="contest_to" type="date" value="${escapeHtml(f.dateTo)}"
+            class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+        </div>
+
+        <div class="lg:col-span-4 flex items-end gap-2">
+          <button id="contest_reset" class="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50">Reset filters</button>
+        </div>
+      </div>
+
+      <div class="mt-4 overflow-auto">
+        <table class="w-full min-w-[1100px] text-left">
+          <thead class="text-xs text-slate-500 uppercase">
+            <tr>
+              <th class="py-2 pr-3">Contest Name</th>
+              <th class="py-2 pr-3">Start date</th>
+              <th class="py-2 pr-3">Finish date</th>
+              <th class="py-2 pr-3">Visibility</th>
+              <th class="py-2 pr-3">Sports</th>
+              <th class="py-2 pr-3">Leagues</th>
+              <th class="py-2 pr-3">Tipsters</th>
+              <th class="py-2 pr-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="8" class="py-6 text-center text-slate-500">No contests match filters.</td></tr>`}</tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm text-slate-700">
+        <div class="font-medium">Delete rule</div>
+        <div class="mt-1">You can delete a contest only if the <b>first game has not started yet</b>.</div>
+      </div>
+    `
+  });
+}
+
+// ---- Contest Add/Edit ----
+function viewContestEdit(contestId){
+  const isNew = !contestId;
+  const contest = isNew ? null : getContestById(contestId);
+
+  if (!state.draft) {
+    state.draft = isNew ? {
+      id: "new",
+      projectId: state.data.projects[0]?.id || "",
+      name: "",
+      shortDescription: "<p></p>",
+      rulesPrizes: "<p></p>",
+      logoUrl: "",
+      startDate: "2026-01-22",
+      finishDate: "2026-01-31",
+      creator: "Admin",
+      visibility: "Public",
+      sports: ["Football"],
+      leagues: ["Premier League"],
+      gamesMode: "All games",
+      gamesDate: "2026-01-23",
+      gameIds: [],
+      markets: ["Match Result"],
+      oddsRangeEnabled: false,
+      oddsFrom: 0,
+      oddsTo: 0,
+      minEligibleTips: 0,
+      rankBy: "Points",
+      meta: { firstGameStarted: false, leaguesCount: 1, tipstersCount: 0 }
+    } : JSON.parse(JSON.stringify(contest));
+  }
+
+  const d = state.draft;
+  // Games selection helpers for Pick by date mode
+  d.gameIds = d.gameIds || [];
+  const selectedGames = (d.gameIds || []).map(getGameById).filter(Boolean);
+  const availableGames = getAvailableGamesForDraft(d);
+  const selectedSet = new Set((d.gameIds || []));
+  const availableGamesToAdd = availableGames.filter(g => !selectedSet.has(g.id));
+  const canDelete = !isNew && !d.meta.firstGameStarted;
+  const projects = state.data.projects;
+  const leagues = ["Premier League","La Liga","NBA","EuroLeague"];
+
+  const rulesRequired = (d.visibility === "Public"); // per spec
+  const rulesOk = !rulesRequired || stripHtml(d.rulesPrizes).trim().length > 0;
+
+  return `
+    ${breadcrumb([
+      { label:"Contests", nav:"contests" },
+      { label: isNew ? "Add Contest" : `Edit Contest: ${contest.name}` },
+    ])}
+
+    ${card({
+      title: isNew ? "Add New Contest" : "Edit Contest",
+      subtitle: !isNew ? `Contest ID: <span class="mono">${escapeHtml(contest.id)}</span>` : "Configure contest rules, schedule, and eligible games.",
+      rightHtml: `
+        <div class="flex gap-2">
+          <button data-nav="contests" class="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50">Back</button>
+          ${!isNew ? `
+            <button data-contestdelete="${contest.id}" class="px-4 py-2 rounded-xl border ${canDelete ? "border-rose-200 text-rose-700 hover:bg-rose-50" : "border-slate-200 text-slate-400 cursor-not-allowed"}"
+              ${canDelete ? "" : "disabled"}
+              title="${canDelete ? "Delete contest" : "Blocked: first game has started"}"
+            >Delete</button>` : ""}
+          <button data-contestsave="${isNew ? "new" : contest.id}" class="px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">Save</button>
+        </div>
+      `,
+      bodyHtml: `
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          ${fieldText("Name", "contest_name", d.name, "Min 5, max 100 chars")}
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Creator</label>
+            <select id="contest_creator" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+              <option selected>Admin</option>
+            </select>
+            <div class="mt-1 text-xs text-slate-500">MVP: only admins can create contests.</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
+            <label class="text-xs font-medium text-slate-600">Short Description (HTML)</label>
+            <textarea id="contest_short" rows="3" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm mono">${escapeHtml(d.shortDescription)}</textarea>
+            <div class="mt-1 text-xs text-slate-500">Min 20 chars (after stripping HTML).</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-medium text-slate-600">Rules & Prizes (HTML)</label>
+              ${rulesRequired ? badge("Required (public)", "amber") : badge("Optional", "slate")}
+            </div>
+            <textarea id="contest_rules" rows="4" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm mono ${rulesOk ? "" : "border-rose-300"}">${escapeHtml(d.rulesPrizes)}</textarea>
+            <div class="mt-1 text-xs ${rulesOk ? "text-slate-500" : "text-rose-700"}">
+              ${rulesOk ? "No char limits. Required only for public visibility." : "Required: add Rules & Prizes for public contests."}
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Visibility</label>
+            <select id="contest_visibility2" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+              ${["Public","Private"].map(v=>`<option ${d.visibility===v?"selected":""}>${v}</option>`).join("")}
+            </select>
+            <div class="mt-1 text-xs text-slate-500">MVP: only Public type is allowed (kept for demo).</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Project</label>
+            <select id="contest_project2" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+              ${projects.map(p=>`<option value="${p.id}" ${d.projectId===p.id?"selected":""}>${escapeHtml(p.name)}</option>`).join("")}
+            </select>
+            <div class="mt-1 text-xs text-slate-500">Contest binds to a project (domain).</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Start date</label>
+            <input id="contest_start" type="date" value="${escapeHtml(d.startDate)}" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Finish date</label>
+            <input id="contest_finish" type="date" value="${escapeHtml(d.finishDate)}" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+            <div class="mt-1 text-xs text-slate-500">Or auto from {league last event} (future enhancement).</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+          <label class="text-xs font-medium text-slate-600">Sports</label>
+          <div class="mt-2 flex flex-wrap gap-2">
+            ${Object.keys(LEAGUES_BY_SPORT).map(s => {
+              const on = (d.sports || []).includes(s);
+              return `
+                <button type="button" data-contest-sport-toggle="${s}"
+                  class="px-3 py-2 rounded-xl text-sm border ${on ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"}">
+                  ${s}
+                </button>
+              `;
+            }).join("")}
+          </div>
+          <div class="mt-1 text-xs text-slate-500">Select one or more sports for the contest.</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Leagues</label>
+            <div class="mt-2 flex flex-wrap gap-2">
+              ${
+                (d.sports || []).flatMap(s => (LEAGUES_BY_SPORT[s] || []).map(l => ({ sport:s, league:l })))
+                .map(({sport, league}) => {
+                  const on = (d.leagues || []).includes(league);
+                  return `
+                    <button type="button" data-contest-league-toggle="${escapeHtml(league)}"
+                      class="px-3 py-2 rounded-xl text-sm border ${on ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"}">
+                      ${league} <span class="text-xs opacity-70">(${sport})</span>
+                    </button>
+                  `;
+                }).join("")
+              }
+            </div>
+            <div class="mt-1 text-xs text-slate-500">Select one or more leagues (filtered by selected sports).</div>
+          </div>
+
+
+          
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Select games</label>
+            <select id="contest_gamesmode" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+              ${["All games","Pick by date"].map(v=>`<option ${d.gamesMode===v?"selected":""}>${v}</option>`).join("")}
+            </select>
+
+            <div class="mt-3 ${d.gamesMode==="Pick by date" ? "" : "opacity-40"}">
+              <label class="text-xs font-medium text-slate-600">Games date</label>
+              <input id="contest_gamesdate" type="date" value="${escapeHtml(d.gamesDate)}"
+                class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                ${d.gamesMode==="Pick by date" ? "" : "disabled"} />
+            </div>
+
+            ${d.gamesMode==="Pick by date" ? `
+              <div class="mt-3 rounded-xl bg-slate-50 border border-slate-200 p-3">
+                <div class="text-xs text-slate-600">
+                  Showing games for <span class="mono">${escapeHtml(d.gamesDate || "—")}</span> within selected leagues.
+                  <span class="text-slate-500">(Demo data)</span>
+                </div>
+
+                ${(d.leagues||[]).length===0 ? `
+                  <div class="mt-2 text-xs text-rose-700">
+                    Select at least one league above to see available games.
+                  </div>
+                ` : ""}
+
+                <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  <!-- Available games -->
+                  <div class="rounded-xl bg-white border border-slate-200 p-3">
+                    <div class="flex items-center justify-between">
+                      <div class="text-sm font-medium">Available games</div>
+                      <button type="button" data-gameaddall="1"
+                        class="px-3 py-2 rounded-xl text-xs border border-slate-200 hover:bg-slate-50"
+                        ${availableGamesToAdd.length===0 ? "disabled" : ""}>
+                        Add all
+                      </button>
+                    </div>
+                    <div class="mt-2 text-xs text-slate-500">
+                      ${availableGamesToAdd.length} game(s) available
+                    </div>
+
+                    <div class="mt-3 space-y-2 max-h-56 overflow-auto pr-1">
+                      ${availableGamesToAdd.length===0 ? `
+                        <div class="text-sm text-slate-500">No games match the selected date/leagues.</div>
+                      ` : availableGamesToAdd.map(g=>`
+                        <div class="flex items-center justify-between gap-2 rounded-xl border border-slate-200 p-2">
+                          <div class="min-w-0">
+                            <div class="text-sm font-medium truncate">${escapeHtml(gameLabel(g))}</div>
+                            <div class="mt-0.5 text-xs text-slate-500">
+                              ${badge(g.league, "sky")} ${badge(g.sport, "slate")}
+                            </div>
+                          </div>
+                          <button type="button" data-gameadd="${escapeHtml(g.id)}"
+                            class="px-3 py-2 rounded-xl text-xs bg-slate-900 text-white hover:bg-slate-800">
+                            Add
+                          </button>
+                        </div>
+                      `).join("")}
+                    </div>
+                  </div>
+
+                  <!-- Selected games -->
+                  <div class="rounded-xl bg-white border border-slate-200 p-3">
+                    <div class="flex items-center justify-between">
+                      <div class="text-sm font-medium">Selected games</div>
+                      <button type="button" data-gameremoveall="1"
+                        class="px-3 py-2 rounded-xl text-xs border border-rose-200 text-rose-700 hover:bg-rose-50"
+                        ${(d.gameIds||[]).length===0 ? "disabled" : ""}>
+                        Clear
+                      </button>
+                    </div>
+                    <div class="mt-2 text-xs text-slate-500">
+                      ${(d.gameIds||[]).length} game(s) selected
+                    </div>
+
+                    <div class="mt-3 space-y-2 max-h-56 overflow-auto pr-1">
+                      ${(selectedGames||[]).length===0 ? `
+                        <div class="text-sm text-slate-500">No games selected yet.</div>
+                      ` : selectedGames.map(g=>`
+                        <div class="flex items-center justify-between gap-2 rounded-xl border border-slate-200 p-2">
+                          <div class="min-w-0">
+                            <div class="text-sm font-medium truncate">${escapeHtml(gameLabel(g))}</div>
+                            <div class="mt-0.5 text-xs text-slate-500">
+                              ${badge(g.league, "sky")} ${badge(g.sport, "slate")}
+                            </div>
+                          </div>
+                          <button type="button" data-gameremove="${escapeHtml(g.id)}"
+                            class="px-3 py-2 rounded-xl text-xs border border-slate-200 hover:bg-slate-50">
+                            Remove
+                          </button>
+                        </div>
+                      `).join("")}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ` : ``}
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Markets</label>
+
+            <select id="contest_markets" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+              <option selected>Match Result</option>
+            </select>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-medium text-slate-600">Odds range</label>
+              <label class="inline-flex items-center gap-2 text-sm">
+                <input id="contest_odds_enabled" type="checkbox" ${d.oddsRangeEnabled ? "checked":""} />
+                Enable
+              </label>
+            </div>
+            <div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3 ${d.oddsRangeEnabled ? "" : "opacity-40"}">
+              <div>
+                <label class="text-xs font-medium text-slate-600">From</label>
+                <input id="contest_odds_from" type="number" step="0.01" value="${d.oddsFrom}"
+                  class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  ${d.oddsRangeEnabled ? "" : "disabled"} />
+              </div>
+              <div>
+                <label class="text-xs font-medium text-slate-600">To</label>
+                <input id="contest_odds_to" type="number" step="0.01" value="${d.oddsTo}"
+                  class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  ${d.oddsRangeEnabled ? "" : "disabled"} />
+              </div>
+            </div>
+            <div class="mt-1 text-xs text-slate-500">If not enabled, assume no limits.</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Minimum number of tips to be eligible</label>
+            <input id="contest_min" type="number" min="0" value="${d.minEligibleTips}"
+              class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+            <div class="mt-1 text-xs text-slate-500">Text ⇒ &gt;0 (0 allowed in spec). MVP uses number input.</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3">
+            <label class="text-xs font-medium text-slate-600">Rank tipsters by</label>
+            <select id="contest_rank" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+              ${["Points"].map(v=>`<option ${d.rankBy===v?"selected":""}>${v}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+
+        ${!isNew ? `
+          <div class="mt-4 rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm text-slate-700">
+            <div class="font-medium">Delete lock</div>
+            <div class="mt-1">
+              ${d.meta.firstGameStarted ? badge("Cannot delete: first game started", "amber") : badge("Can delete (first game not started)", "emerald")}
+            </div>
+          </div>
+        ` : ""}
+      `
+    })}
+  `;
+}
+
+function stripHtml(html){
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html || "";
+  return tmp.textContent || tmp.innerText || "";
+}
+
+// ---- Tipsters List ----
+function viewTipsters(){
+  const { contests } = state.data;
+  const f = state.filters.tipsters;
+
+  const { pageRows, total, pages, page, pageSize } = getTipstersTableRows();
+
+  const contestOptions = [{id:"All", name:"All contests"}]
+    .concat(contests.map(c=>({id:c.id, name:c.name})));
+
+  const sports = Array.from(new Set(contests.map(c=>c.sport))).sort();
+  const leagues = Array.from(new Set(contests.map(c=>c.league))).sort();
+  const visibility = ["Public","Private"];
+
+  const rows = pageRows.map(r=>{
+    const t = r.tipster;
+    const m = r.metrics;
+    return `
+      <tr class="border-t border-slate-100">
+        <td class="py-3 pr-3">
+          <div class="font-medium">${escapeHtml(t.displayName)}</div>
+          <div class="text-xs text-slate-500 mono">${escapeHtml(t.nickname)}</div>
+        </td>
+        <td class="py-3 pr-3 text-sm">${fmtInt(m.points)}</td>
+        <td class="py-3 pr-3 text-sm">${fmt(m.profit)}</td>
+        <td class="py-3 pr-3 text-sm">${fmt(m.yieldPct)}%</td>
+        <td class="py-3 pr-3 text-sm">${fmt(m.avgOdds)}</td>
+        <td class="py-3 pr-3 text-sm">${fmt(m.winRate)}%</td>
+        <td class="py-3 pr-3 text-sm">${fmtInt(m.total)}</td>
+        <td class="py-3 pr-3 text-sm">${fmtInt(m.won)}</td>
+        <td class="py-3 pr-3 text-sm">${fmtInt(m.lost)}</td>
+        <td class="py-3 pr-3 text-sm">${fmtInt(m.voided)}</td>
+        <td class="py-3 pr-3 text-sm">${fmtInt(m.open)}</td>
+        <td class="py-3 pr-3 text-right">
+          <button data-nav="tipsterStats" data-tipsterid="${t.id}" class="px-3 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">See Tipster Stats</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  return card({
+    title: "Tipsters",
+    subtitle: "Shows users who made at least one prediction (after filters).",
+    rightHtml: `
+      <div class="text-xs text-slate-500">
+        ${badge(`Total results: ${total}`, "slate")}
+      </div>
+    `,
+    bodyHtml: `
+      <div class="grid grid-cols-1 lg:grid-cols-6 gap-3">
+        <div class="lg:col-span-2">
+          <label class="text-xs font-medium text-slate-600">Search by nickname</label>
+          <input id="tip_q" type="text" value="${escapeHtml(f.q)}" placeholder="e.g., ValueHunter"
+            class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Contest</label>
+          <select id="tip_contest" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            ${contestOptions.map(o=>`<option value="${o.id}" ${f.contest===o.id?"selected":""}>${escapeHtml(o.name)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Visibility</label>
+          <select id="tip_visibility" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            <option ${f.visibility==="All"?"selected":""}>All</option>
+            ${visibility.map(v=>`<option ${f.visibility===v?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Sport</label>
+          <select id="tip_sport" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            <option ${f.sport==="All"?"selected":""}>All</option>
+            ${sports.map(v=>`<option ${f.sport===v?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">League</label>
+          <select id="tip_league" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            <option ${f.league==="All"?"selected":""}>All</option>
+            ${leagues.map(v=>`<option ${f.league===v?"selected":""}>${escapeHtml(v)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Last X tips</label>
+          <input id="tip_lastx" type="number" min="1" max="200" value="${escapeHtml(String(f.lastXTips))}"
+            class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Sort by</label>
+          <select id="tip_sortby" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            ${["Points","Profit","Yield","WinRate"].map(v=>`<option ${f.sortBy===v?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Sort dir</label>
+          <select id="tip_sortdir" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            ${["desc","asc"].map(v=>`<option ${f.sortDir===v?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs font-medium text-slate-600">Rows per page</label>
+          <select id="tip_pagesize" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+            ${[20,50,100].map(v=>`<option value="${v}" ${pageSize===v?"selected":""}>${v}</option>`).join("")}
+          </select>
+        </div>
+
+        <div class="lg:col-span-2 flex items-end gap-2">
+          <button id="tip_reset" class="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50">Reset filters</button>
+        </div>
+      </div>
+
+      <div class="mt-4 overflow-auto">
+        <table class="w-full min-w-[1200px] text-left">
+          <thead class="text-xs text-slate-500 uppercase">
+            <tr>
+              <th class="py-2 pr-3">Tipster Name</th>
+              <th class="py-2 pr-3">Points</th>
+              <th class="py-2 pr-3">Profit</th>
+              <th class="py-2 pr-3">Yield</th>
+              <th class="py-2 pr-3">Average Odds</th>
+              <th class="py-2 pr-3">WinRate</th>
+              <th class="py-2 pr-3">Total Tips</th>
+              <th class="py-2 pr-3">Won</th>
+              <th class="py-2 pr-3">Lost</th>
+              <th class="py-2 pr-3">Void</th>
+              <th class="py-2 pr-3">Open</th>
+              <th class="py-2 pr-3 text-right">Stats</th>
+            </tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="12" class="py-6 text-center text-slate-500">No tipsters match filters.</td></tr>`}</tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div class="text-sm text-slate-600">Total results: <b>${total}</b></div>
+        <div class="flex items-center gap-2">
+          <button data-page="prev" class="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 ${page<=1 ? "opacity-40 cursor-not-allowed" : ""}" ${page<=1 ? "disabled":""}>Prev</button>
+          <div class="text-sm text-slate-600">Page <b>${page}</b> / ${pages}</div>
+          <button data-page="next" class="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 ${page>=pages ? "opacity-40 cursor-not-allowed" : ""}" ${page>=pages ? "disabled":""}>Next</button>
+        </div>
+      </div>
+    `
+  });
+}
+
+// ---- Tipster Stats ----
+function viewTipsterStats(tipsterId){
+  const t = getTipsterById(tipsterId);
+  if (!t) return errorPage();
+
+  // For stats screen, we show tips for the selected contest if filter has one; else show all.
+  const f = state.filters.tipsters;
+  const contestById = Object.fromEntries(state.data.contests.map(c=>[c.id,c]));
+  let myTips = state.data.tips.filter(x => x.tipsterId===tipsterId);
+  if (f.contest !== "All") myTips = myTips.filter(x => x.contestId === f.contest);
+
+  // Aggregate across projects (same approach as list)
+  const groups = new Map();
+  for (const tip of myTips) {
+    const c = contestById[tip.contestId];
+    if (!c) continue;
+    const g = groups.get(c.projectId) || [];
+    g.push(tip);
+    groups.set(c.projectId, g);
+  }
+
+  let agg = {
+    points: 0, profit: 0, yieldPct: 0, avgOdds: 0, winRate: 0,
+    total: 0, won: 0, lost: 0, voided: 0, open: 0,
+    _avgOddsSum: 0, _tipsCountForAvg: 0, _stakeSum: 0,
+  };
+
+  for (const [projectId, tipsArr] of groups.entries()) {
+    const m = calcTipsterMetrics({ tipsterId, tips: tipsArr, projectId });
+    agg.points += m.points;
+    agg.profit += m.profit;
+    agg.total += m.total;
+    agg.won += m.won;
+    agg.lost += m.lost;
+    agg.voided += m.voided;
+    agg.open += m.open;
+    agg._avgOddsSum += m.avgOdds * m.total;
+    agg._tipsCountForAvg += m.total;
+    agg._stakeSum += sumStakeForYield(tipsArr);
+  }
+  agg.avgOdds = agg._tipsCountForAvg>0 ? agg._avgOddsSum / agg._tipsCountForAvg : 0;
+  agg.winRate = (agg.won+agg.lost)>0 ? (agg.won/(agg.won+agg.lost))*100 : 0;
+  agg.yieldPct = agg._stakeSum>0 ? (agg.profit/agg._stakeSum)*100 : 0;
+
+  // tips table
+  const rows = myTips.map(tip=>{
+    const c = contestById[tip.contestId];
+    const project = c ? getProjectById(c.projectId) : null;
+    const points = (tip.status==="Won" && project) ? pointsForProbability(project, tip.probability) : 0;
+    const profit = profitForTip(tip);
+
+    return `
+      <tr class="border-t border-slate-100">
+        <td class="py-3 pr-3 mono text-xs">${escapeHtml(tip.id)}</td>
+        <td class="py-3 pr-3 text-sm">${escapeHtml(c?.name || "—")}</td>
+        <td class="py-3 pr-3 text-sm">${escapeHtml(tip.market)}</td>
+        <td class="py-3 pr-3 text-sm">${escapeHtml(tip.match || "—")}</td>
+        <td class="py-3 pr-3 text-sm">${fmt(tip.odds)}</td>
+        <td class="py-3 pr-3 text-sm">${fmtInt(tip.probability)}%</td>
+        <td class="py-3 pr-3 text-sm">${badge(tip.status, tip.status==="Won"?"emerald":tip.status==="Lost"?"rose":tip.status==="Void"?"amber":"slate")}</td>
+        <td class="py-3 pr-3 text-sm">${fmtInt(points)}</td>
+        <td class="py-3 pr-3 text-sm">${fmt(profit)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    ${breadcrumb([
+      { label:"Tipsters", nav:"tipsters" },
+      { label:`Tipster Stats: ${t.displayName}` },
+    ])}
+
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+      <div class="xl:col-span-1">
+        ${card({
+          title: t.displayName,
+          subtitle: `<span class="mono">@${escapeHtml(t.nickname)}</span>`,
+          rightHtml: `<button data-nav="tipsters" class="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50">Back</button>`,
+          bodyHtml: `
+            <div class="grid grid-cols-2 gap-3">
+              ${metricTile("Points", fmtInt(agg.points))}
+              ${metricTile("Profit", fmt(agg.profit))}
+              ${metricTile("Yield", `${fmt(agg.yieldPct)}%`)}
+              ${metricTile("Average Odds", fmt(agg.avgOdds))}
+              ${metricTile("WinRate", `${fmt(agg.winRate)}%`)}
+              ${metricTile("Total Tips", fmtInt(agg.total))}
+              ${metricTile("Won", fmtInt(agg.won))}
+              ${metricTile("Lost", fmtInt(agg.lost))}
+              ${metricTile("Void", fmtInt(agg.voided))}
+              ${metricTile("Open", fmtInt(agg.open))}
+            </div>
+
+            <div class="mt-4 rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm text-slate-700">
+              <div class="font-medium">Calculation rules (demo)</div>
+              <ul class="list-disc pl-5 mt-2 space-y-1">
+                <li><b>Points</b>: sum of points for <b>winning</b> tips only, by project ranges.</li>
+                <li><b>Profit</b>: toggled in Demo Controls (net vs grossSigned).</li>
+                <li><b>Yield</b>: (Profit / SumStake) × 100%, stake=100 coins per Won/Lost tip.</li>
+                <li><b>WinRate</b>: Won / (Won + Lost), excluding Void/Open.</li>
+              </ul>
+            </div>
+          `
+        })}
+      </div>
+
+      <div class="xl:col-span-2">
+        ${card({
+          title: "Tips",
+          subtitle: f.contest==="All" ? "All tips for this tipster (across contests)" : `Filtered by selected contest: ${escapeHtml(getContestById(f.contest)?.name || f.contest)}`,
+          bodyHtml: `
+            <div class="overflow-auto">
+              <table class="w-full min-w-[900px] text-left">
+                <thead class="text-xs text-slate-500 uppercase">
+                  <tr>
+                    <th class="py-2 pr-3">Tip ID</th>
+                    <th class="py-2 pr-3">Contest</th>
+                    <th class="py-2 pr-3">Market</th>
+                    <th class="py-2 pr-3">Match</th>
+                    <th class="py-2 pr-3">Odds</th>
+                    <th class="py-2 pr-3">Probability</th>
+                    <th class="py-2 pr-3">Status</th>
+                    <th class="py-2 pr-3">Points</th>
+                    <th class="py-2 pr-3">Profit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows || `<tr><td colspan="8" class="py-6 text-center text-slate-500">No tips found.</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+          `
+        })}
+      </div>
+    </div>
+  `;
+}
+
+function metricTile(label, value){
+  return `
+    <div class="rounded-xl border border-slate-200 p-3 bg-white">
+      <div class="text-xs text-slate-500">${escapeHtml(label)}</div>
+      <div class="mt-1 text-lg font-semibold">${escapeHtml(value)}</div>
+    </div>
+  `;
+}
+
+// ---------- Event binding ----------
+function bindCommonListeners(){
+  document.querySelectorAll("[data-nav]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const nav = btn.getAttribute("data-nav");
+      const pid = btn.getAttribute("data-projectid");
+      const cid = btn.getAttribute("data-contestid");
+      const tid = btn.getAttribute("data-tipsterid");
+      const contestForTipsters = btn.getAttribute("data-tipsterscontest");
+
+      if (nav === "projectEdit") return setRoute("projectEdit", { projectId: pid });
+      if (nav === "contestEdit") return setRoute("contestEdit", { contestId: cid });
+      if (nav === "tipsterStats") return setRoute("tipsterStats", { tipsterId: tid });
+      if (nav === "tipsters" && contestForTipsters) {
+        state.filters.tipsters.contest = contestForTipsters;
+        state.filters.tipsters.page = 1;
+        return setRoute("tipsters");
+      }
+      setRoute(nav);
+    });
+  });
+
+  // Modal close
+  document.querySelectorAll("[data-modalclose], [data-modalbg]").forEach(el=>{
+    el.addEventListener("click", (e)=>{
+      if (el.hasAttribute("data-modalbg") && e.target !== el) return;
+      closeModal();
+    });
+  });
+  const confirmBtn = document.querySelector("[data-modalconfirm]");
+  if (confirmBtn) confirmBtn.addEventListener("click", ()=>{
+    const m = state.ui.modal;
+    closeModal();
+    if (m && typeof m.onConfirm === "function") m.onConfirm();
+  });
+
+  // Demo controls
+  document.querySelectorAll("[data-demomode]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.demo.apiMode = btn.getAttribute("data-demomode");
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-profitmode]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.demo.profitMode = btn.getAttribute("data-profitmode");
+      render();
+    });
+  });
+
+  const demoNow = document.getElementById("demoNow");
+  if (demoNow) demoNow.addEventListener("change", ()=>{
+    state.demo.now = demoNow.value || todayISO();
+    render();
+  });
+  const demoNowToday = document.getElementById("demoNowToday");
+  if (demoNowToday) demoNowToday.addEventListener("click", ()=>{
+    state.demo.now = todayISO();
+    render();
+  });
+
+  const retry = document.getElementById("retryApi");
+  if (retry) retry.addEventListener("click", ()=>{
+    state.demo.apiMode = "ok";
+    toast("Retry successful (simulated).", "success");
+    render();
+  });
+}
+
+function bindViewListeners(){
+  // Projects
+  const addProj = document.querySelector("[data-projectadd]");
+  if (addProj) addProj.addEventListener("click", ()=> setRoute("projectEdit", { projectId: "" }));
+
+  document.querySelectorAll("[data-projectdelete]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const id = btn.getAttribute("data-projectdelete");
+      const p = getProjectById(id);
+      if (!p) return;
+      if (p.meta.activeContestsCount > 0) return toast("Blocked: project has active contests.", "error");
+      openModal({
+        title: "Delete project?",
+        confirmText: "Delete",
+        bodyHtml: `
+          <div class="text-sm text-slate-700">
+            This will remove <b>${escapeHtml(p.name)}</b>. This demo enforces: delete allowed only if no active contests.
+          </div>`,
+        onConfirm: ()=>{
+          state.data.projects = state.data.projects.filter(x=>x.id!==id);
+          toast("Project deleted.", "success");
+          setRoute("projects");
+        }
+      });
+    });
+  });
+
+  // Project form
+  const saveProj = document.querySelector("[data-projectsave]");
+  if (saveProj) saveProj.addEventListener("click", ()=>{
+    const key = saveProj.getAttribute("data-projectsave");
+    const d = state.draft;
+
+    // pull inputs
+    const name = document.getElementById("proj_name")?.value || "";
+    const domain = document.getElementById("proj_domain")?.value || "";
+    const path = document.getElementById("proj_path")?.value || "";
+    d.name = name;
+    d.domain = domain;
+    d.path = path;
+
+    // basic validation
+    const errors = [];
+    if (name.trim().length < 3) errors.push("Name: min 3 chars.");
+    if (domain.trim().length < 3) errors.push("Domain: min 3 chars.");
+    if (path.trim().length < 3) errors.push("Path: min 3 chars.");
+
+    // ranges validation: cover 0..100 without overlaps and from<=to
+    const ranges = d.ranges.map(r=>({from:Number(r.from),to:Number(r.to),points:Number(r.points)}));
+    for (const r of ranges){
+      if (!Number.isFinite(r.from) || !Number.isFinite(r.to) || r.from<0 || r.to>100 || r.from>r.to) {
+        errors.push("Ranges: each row must have 0<=from<=to<=100.");
+        break;
+      }
+    }
+    // overlap check
+    const sorted = ranges.slice().sort((a,b)=>a.from-b.from);
+    for (let i=1;i<sorted.length;i++){
+      if (sorted[i].from <= sorted[i-1].to) {
+        errors.push("Ranges: overlaps detected. Make ranges non-overlapping.");
+        break;
+      }
+    }
+    // coverage check (soft)
+    if (sorted.length>0){
+      if (sorted[0].from !== 0) errors.push("Ranges: should start at 0%.");
+      const last = sorted[sorted.length-1];
+      if (last.to !== 100) errors.push("Ranges: should end at 100%.");
+    }
+
+    if (errors.length){
+      openModal({
+        title: "Validation errors",
+        confirmText: "OK",
+        bodyHtml: `<div class="text-sm text-slate-700">
+          <ul class="list-disc pl-5 space-y-1">${errors.map(e=>`<li>${escapeHtml(e)}</li>`).join("")}</ul>
+        </div>`,
+        onConfirm: ()=>{}
+      });
+      return;
+    }
+
+    if (key === "new") {
+      const newProject = {
+        id: "p" + uid(),
+        name: d.name.trim(),
+        domain: d.domain.trim(),
+        path: d.path.trim(),
+        sports: d.sports.slice(),
+        ranges: d.ranges.map(x=>({from:Number(x.from),to:Number(x.to),points:Number(x.points)})),
+        meta: { leaguesCreatedCount: 0, hasLeaguesBySport: {Football:false,Basketball:false}, hasStartedOrFinishedGames:false, activeContestsCount:0 }
+      };
+      state.data.projects.unshift(newProject);
+      toast("Project created.", "success");
+      setRoute("projects");
+    } else {
+      const p = getProjectById(key);
+      if (!p) return;
+      // enforce locks (Domain/Path if leaguesCreatedCount>0)
+      if (p.meta.leaguesCreatedCount === 0) {
+        p.domain = d.domain.trim();
+        p.path = d.path.trim();
+      }
+      p.name = d.name.trim();
+      // sports lock: can't remove if leagues exist. We'll enforce by preventing toggle earlier.
+      p.sports = d.sports.slice();
+      // ranges lock if started/finished games exist
+      if (!p.meta.hasStartedOrFinishedGames) {
+        p.ranges = d.ranges.map(x=>({from:Number(x.from),to:Number(x.to),points:Number(x.points)}));
+      }
+      toast("Project saved.", "success");
+      setRoute("projects");
+    }
+  });
+
+  document.querySelectorAll("[data-sporttoggle]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const sport = btn.getAttribute("data-sporttoggle");
+      const d = state.draft;
+      const editingId = state.route.params.projectId;
+      const p = editingId ? getProjectById(editingId) : null;
+
+      const isSelected = d.sports.includes(sport);
+      if (isSelected) {
+        // lock removing sport if leagues exist
+        if (p && p.meta.hasLeaguesBySport[sport]) return toast("Blocked: cannot remove sport with existing leagues.", "error");
+        d.sports = d.sports.filter(x=>x!==sport);
+      } else {
+        d.sports.push(sport);
+      }
+      render();
+    });
+  });
+
+  const addRange = document.querySelector("[data-rangeadd]");
+  if (addRange) addRange.addEventListener("click", ()=>{
+    const d = state.draft;
+    d.ranges.push({ from: 0, to: 0, points: 0 });
+    render();
+  });
+
+  document.querySelectorAll("[data-rangedelete]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const idx = Number(btn.getAttribute("data-rangedelete"));
+      state.draft.ranges.splice(idx,1);
+      render();
+    });
+  });
+
+  document.querySelectorAll("input[data-rangefrom], input[data-rangeto], input[data-rangepoints]").forEach(inp=>{
+    inp.addEventListener("change", ()=>{
+      const d = state.draft;
+      const idx =
+        inp.hasAttribute("data-rangefrom") ? Number(inp.getAttribute("data-rangefrom")) :
+        inp.hasAttribute("data-rangeto") ? Number(inp.getAttribute("data-rangeto")) :
+        Number(inp.getAttribute("data-rangepoints"));
+      const key =
+        inp.hasAttribute("data-rangefrom") ? "from" :
+        inp.hasAttribute("data-rangeto") ? "to" : "points";
+      d.ranges[idx][key] = Number(inp.value);
+    });
+  });
+
+  // Contests list
+  const addContest = document.querySelector("[data-contestadd]");
+  if (addContest) addContest.addEventListener("click", ()=> setRoute("contestEdit", { contestId: "" }));
+
+  document.querySelectorAll("[data-contestdelete]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const id = btn.getAttribute("data-contestdelete");
+      const c = getContestById(id);
+      if (!c) return;
+      if (c.meta.firstGameStarted) return toast("Blocked: first game has started.", "error");
+      openModal({
+        title: "Delete contest?",
+        confirmText: "Delete",
+        bodyHtml: `<div class="text-sm text-slate-700">
+          This will remove <b>${escapeHtml(c.name)}</b>. Rule: delete allowed only if first game has not started.
+        </div>`,
+        onConfirm: ()=>{
+          state.data.contests = state.data.contests.filter(x=>x.id!==id);
+          // tips referencing this contest removed
+          state.data.tips = state.data.tips.filter(t=>t.contestId!==id);
+          // recompute activeContestsCount in projects (simplistic)
+          recomputeProjectActiveCounts();
+          toast("Contest deleted.", "success");
+          setRoute("contests");
+        }
+      });
+    });
+  });
+
+  // contests filters
+  const cq = document.getElementById("contest_q");
+  if (cq) cq.addEventListener("input", ()=>{ state.filters.contests.q = cq.value; render(); });
+  const cp = document.getElementById("contest_project");
+  if (cp) cp.addEventListener("change", ()=>{ state.filters.contests.project = cp.value; render(); });
+  const cv = document.getElementById("contest_visibility");
+  if (cv) cv.addEventListener("change", ()=>{ state.filters.contests.visibility = cv.value; render(); });
+  const cs = document.getElementById("contest_sport");
+  if (cs) cs.addEventListener("change", ()=>{ state.filters.contests.sport = cs.value; render(); });
+  const cl = document.getElementById("contest_league");
+  if (cl) cl.addEventListener("change", ()=>{ state.filters.contests.league = cl.value; render(); });
+  const cf = document.getElementById("contest_from");
+  if (cf) cf.addEventListener("change", ()=>{ state.filters.contests.dateFrom = cf.value; render(); });
+  const ct = document.getElementById("contest_to");
+  if (ct) ct.addEventListener("change", ()=>{ state.filters.contests.dateTo = ct.value; render(); });
+  const cr = document.getElementById("contest_reset");
+  if (cr) cr.addEventListener("click", ()=>{
+    state.filters.contests = { q:"", dateFrom:"", dateTo:"", visibility:"All", sport:"All", league:"All", project:"All" };
+    render();
+  });
+
+  // contest form save
+  const saveContest = document.querySelector("[data-contestsave]");
+  if (saveContest) saveContest.addEventListener("click", ()=>{
+    const key = saveContest.getAttribute("data-contestsave");
+    const d = state.draft;
+
+  // collect inputs
+  d.name = document.getElementById("contest_name")?.value || "";
+  d.shortDescription = document.getElementById("contest_short")?.value || "";
+  d.rulesPrizes = document.getElementById("contest_rules")?.value || "";
+  d.visibility = document.getElementById("contest_visibility2")?.value || "Public";
+  d.projectId = document.getElementById("contest_project2")?.value || d.projectId;
+  d.creator = document.getElementById("contest_creator")?.value || "Admin";
+  d.startDate = document.getElementById("contest_start")?.value || d.startDate;
+  d.finishDate = document.getElementById("contest_finish")?.value || d.finishDate;
+
+  // ensure multi fields exist (chips update these directly)
+  d.sports = d.sports || [];
+  d.leagues = d.leagues || [];
+  d.gameIds = d.gameIds || [];
+
+  d.gamesMode = document.getElementById("contest_gamesmode")?.value || d.gamesMode;
+  d.gamesDate = document.getElementById("contest_gamesdate")?.value || d.gamesDate;
+  if (d.gamesMode !== "Pick by date") d.gameIds = [];
+  d.oddsRangeEnabled = !!document.getElementById("contest_odds_enabled")?.checked;
+  d.oddsFrom = Number(document.getElementById("contest_odds_from")?.value || 0);
+  d.oddsTo = Number(document.getElementById("contest_odds_to")?.value || 0);
+  d.minEligibleTips = Number(document.getElementById("contest_min")?.value || 0);
+  d.rankBy = document.getElementById("contest_rank")?.value || "Points";
+
+  const errors = [];
+
+  const n = d.name.trim().length;
+  if (n < 5 || n > 100) errors.push("Name must be 5..100 chars.");
+  if (stripHtml(d.shortDescription).trim().length < 20)
+    errors.push("Short Description must be at least 20 chars (after stripping HTML).");
+  if (d.visibility === "Public" && stripHtml(d.rulesPrizes).trim().length === 0)
+    errors.push("Rules & Prizes is required for public contests.");
+
+  // ✅ ADD THESE TWO LINES HERE
+  if (!Array.isArray(d.sports) || d.sports.length === 0)
+    errors.push("Select at least one sport.");
+  if (!Array.isArray(d.leagues) || d.leagues.length === 0)
+    errors.push("Select at least one league.");
+  if (d.gamesMode === "Pick by date" && (!Array.isArray(d.gameIds) || d.gameIds.length === 0))
+    errors.push("Pick by date: select at least one game.");
+
+
+  if (parseDate(d.finishDate) < parseDate(d.startDate))
+    errors.push("Finish date must be >= start date.");
+
+  if (d.oddsRangeEnabled) {
+    if (!(d.oddsFrom >= 0 && d.oddsTo > 0 && d.oddsTo >= d.oddsFrom && d.oddsTo <= 10)) {
+      errors.push("Odds range invalid. Expect 0..10 and To >= From.");
+    }
+  }
+
+    if (errors.length){
+      openModal({
+        title: "Validation errors",
+        confirmText: "OK",
+        bodyHtml: `<div class="text-sm text-slate-700">
+          <ul class="list-disc pl-5 space-y-1">${errors.map(e=>`<li>${escapeHtml(e)}</li>`).join("")}</ul>
+        </div>`,
+        onConfirm: ()=>{}
+      });
+      return;
+    }
+
+    if (key === "new") {
+      const newContest = {
+        ...d,
+        id: "c" + uid(),
+        meta: { firstGameStarted: false, leaguesCount: (d.leagues||[]).length, tipstersCount: 0 }
+      };
+      state.data.contests.unshift(newContest);
+      recomputeProjectActiveCounts();
+      toast("Contest created.", "success");
+      setRoute("contests");
+    } else {
+      const c = getContestById(key);
+      if (!c) return;
+      Object.assign(c, d);
+      c.meta.leaguesCount = (c.leagues||[]).length;
+      toast("Contest saved.", "success");
+      setRoute("contests");
+    }
+  });
+
+  // contest form toggles re-render needed
+  ["contest_visibility2","contest_gamesmode","contest_gamesdate","contest_odds_enabled"].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", ()=>{
+      if (id === "contest_odds_enabled") state.draft.oddsRangeEnabled = !!el.checked;
+      if (id === "contest_gamesmode") state.draft.gamesMode = el.value;
+      if (id === "contest_gamesdate") state.draft.gamesDate = el.value;
+      if (id === "contest_visibility2") state.draft.visibility = el.value;
+      render();
+    });
+  });
+
+  // Wire up the click handlers
+
+    document.querySelectorAll("[data-contest-sport-toggle]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const s = btn.getAttribute("data-contest-sport-toggle");
+      state.draft.sports = state.draft.sports || [];
+      state.draft.leagues = state.draft.leagues || [];
+
+      const on = state.draft.sports.includes(s);
+      if (on) {
+        // remove sport
+        state.draft.sports = state.draft.sports.filter(x => x !== s);
+
+        // also remove leagues that belong ONLY to that sport
+        const allowedLeagues = new Set(
+          (state.draft.sports || []).flatMap(sp => LEAGUES_BY_SPORT[sp] || [])
+        );
+        state.draft.leagues = (state.draft.leagues || []).filter(l => allowedLeagues.has(l));
+      } else {
+        state.draft.sports.push(s);
+      }
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-contest-league-toggle]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const league = btn.getAttribute("data-contest-league-toggle");
+      state.draft.leagues = state.draft.leagues || [];
+      const on = state.draft.leagues.includes(league);
+      state.draft.leagues = on
+        ? state.draft.leagues.filter(x => x !== league)
+        : [...state.draft.leagues, league];
+      render();
+    });
+  });
+
+
+
+  // Contest: Pick by date — game picker
+  document.querySelectorAll("[data-gameadd]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const gid = btn.getAttribute("data-gameadd");
+      state.draft.gameIds = state.draft.gameIds || [];
+      if (!state.draft.gameIds.includes(gid)) state.draft.gameIds.push(gid);
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-gameremove]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const gid = btn.getAttribute("data-gameremove");
+      state.draft.gameIds = (state.draft.gameIds || []).filter(x => x !== gid);
+      render();
+    });
+  });
+
+  const addAll = document.querySelector("[data-gameaddall]");
+  if (addAll) addAll.addEventListener("click", ()=>{
+    state.draft.gameIds = state.draft.gameIds || [];
+    const available = getAvailableGamesForDraft(state.draft);
+    for (const g of available){
+      if (!state.draft.gameIds.includes(g.id)) state.draft.gameIds.push(g.id);
+    }
+    render();
+  });
+
+  const removeAll = document.querySelector("[data-gameremoveall]");
+  if (removeAll) removeAll.addEventListener("click", ()=>{
+    state.draft.gameIds = [];
+    render();
+  });
+
+  // Tipsters
+  const tipq = document.getElementById("tip_q");
+  if (tipq) tipq.addEventListener("input", ()=>{ state.filters.tipsters.q = tipq.value; state.filters.tipsters.page=1; render(); });
+
+  const tipContest = document.getElementById("tip_contest");
+  if (tipContest) tipContest.addEventListener("change", ()=>{ state.filters.tipsters.contest = tipContest.value; state.filters.tipsters.page=1; render(); });
+
+  const tipVis = document.getElementById("tip_visibility");
+  if (tipVis) tipVis.addEventListener("change", ()=>{ state.filters.tipsters.visibility = tipVis.value; state.filters.tipsters.page=1; render(); });
+
+  const tipSport = document.getElementById("tip_sport");
+  if (tipSport) tipSport.addEventListener("change", ()=>{ state.filters.tipsters.sport = tipSport.value; state.filters.tipsters.page=1; render(); });
+
+  const tipLeague = document.getElementById("tip_league");
+  if (tipLeague) tipLeague.addEventListener("change", ()=>{ state.filters.tipsters.league = tipLeague.value; state.filters.tipsters.page=1; render(); });
+
+  const tipLast = document.getElementById("tip_lastx");
+  if (tipLast) tipLast.addEventListener("change", ()=>{ state.filters.tipsters.lastXTips = Number(tipLast.value)||20; state.filters.tipsters.page=1; render(); });
+
+  const tipSortBy = document.getElementById("tip_sortby");
+  if (tipSortBy) tipSortBy.addEventListener("change", ()=>{ state.filters.tipsters.sortBy = tipSortBy.value; render(); });
+
+  const tipSortDir = document.getElementById("tip_sortdir");
+  if (tipSortDir) tipSortDir.addEventListener("change", ()=>{ state.filters.tipsters.sortDir = tipSortDir.value; render(); });
+
+  const tipPageSize = document.getElementById("tip_pagesize");
+  if (tipPageSize) tipPageSize.addEventListener("change", ()=>{ state.filters.tipsters.pageSize = Number(tipPageSize.value)||20; state.filters.tipsters.page=1; render(); });
+
+  const tipReset = document.getElementById("tip_reset");
+  if (tipReset) tipReset.addEventListener("click", ()=>{
+    state.filters.tipsters = {
+      q:"", contest:"All", year:"All", yearMonth:"All", visibility:"All",
+      sport:"All", league:"All", lastXTips:20, sortBy:"Points", sortDir:"desc",
+      page:1, pageSize:20
+    };
+    render();
+  });
+
+  document.querySelectorAll("[data-page]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const dir = btn.getAttribute("data-page");
+      if (dir === "prev") state.filters.tipsters.page -= 1;
+      if (dir === "next") state.filters.tipsters.page += 1;
+      render();
+    });
+  });
+}
+
+function recomputeProjectActiveCounts(){
+  // simplistic: treat contests with firstGameStarted=true as "active"
+  const activeByProject = new Map();
+  for (const c of state.data.contests){
+    const isActive = !!c.meta.firstGameStarted;
+    if (!activeByProject.has(c.projectId)) activeByProject.set(c.projectId, 0);
+    if (isActive) activeByProject.set(c.projectId, activeByProject.get(c.projectId)+1);
+  }
+  for (const p of state.data.projects){
+    p.meta.activeContestsCount = activeByProject.get(p.id) || 0;
+  }
+}
+
+// ---------- Init ----------
+render();
+</script>
+</body>
+</html>
