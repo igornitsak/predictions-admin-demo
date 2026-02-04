@@ -134,7 +134,7 @@
 
 По клику на “See Tipster Stats” открывается таблица с данными по конкретному типстеру.
 
-[Смотрите демонстрационную таблицу с примером расчётов параметров для одного типстера](https://docs.google.com/spreadsheets/d/1-L8ejXHC8OJ8xQJJhYD706sg9Hf8S9v4kTyrO8R49SQ/edit?gid=1895330063#gid=1895330063)
+[Смотрите демонстрационную таблицу с примером расчётов параметров для одного типстера](https://docs.google.com/spreadsheets/d/1-L8ejXHC8OJ8xQJJhYD706sg9Hf8S9v4kTyrO8R49SQ/edit?usp=sharing)
 
 ---
 
