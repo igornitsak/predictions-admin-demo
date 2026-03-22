@@ -78,7 +78,9 @@
 |---|---|---|
 | Name | text | Min 5 max 100 chars |
 | Short Description | HTML | Min 20 chars |
-| Rules & Prizes\* | HTML | No chars limits |
+| Prizes\* | HTML | No chars limits |
+| Prize Fund | Text | No chars limits |
+| Rules & Description | HTML | No chars limits |
 | Logo | IMG | webp, png, jpeg |
 | start | date | Jan 22, 2026 |
 | finish | date | Jan 31, 2026 or {league last event} |
@@ -93,7 +95,6 @@
 | Rank tipsters by | dropdown | Points |
 | CRUD | buttons | Save / Delete\*\*\* |
 
-*Поле “Rules & Prizes” обязательно только если visibility = public.
 **Если Odds range не отмечен, считаем, что ограничений нет.
 ***Вы можете удалить созданный contest только если первая игра ещё не началась.
 ****MVP позволяет создавать лиги только для администраторов
