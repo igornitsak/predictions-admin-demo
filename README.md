@@ -78,9 +78,11 @@
 |---|---|---|
 | Name | text | Min 5 max 100 chars |
 | Short Description | HTML | Min 20 chars |
-| Prizes\* | HTML | No chars limits |
+| Prizes | HTML | No chars limits |
 | Prize Fund | Text | No chars limits |
 | Rules & Description | HTML | No chars limits |
+| Simple Contest | Checkbox | Enabled, Disabled |
+| Simple Contest | Checkbox | Enabled, Disabled |
 | Logo | IMG | webp, png, jpeg |
 | start | date | Jan 22, 2026 |
 | finish | date | Jan 31, 2026 or {league last event} |
@@ -95,10 +97,12 @@
 | Rank tipsters by | dropdown | Points |
 | CRUD | buttons | Save / Delete\*\*\* |
 
-**Если Odds range не отмечен, считаем, что ограничений нет.
-***Вы можете удалить созданный contest только если первая игра ещё не началась.
-****MVP позволяет создавать лиги только для администраторов
-*****MVP позволяет только public тип contests
+Если Odds range не отмечен, считаем, что ограничений по коэффициентам нет.
+Вы можете удалить созданный contest только если первая игра ещё не началась.
+Если выбрана опция "Simple Contest", то пользователи могут делать прогнозы только на исход матча и точный счет. Администратор может указать отдельно кол-во очков за правильно угаданый исход (по дефолту - 1) и точный счет (по дефолту - 3).
+Если выбрана опция "Simple Contest", то заданые Points & Ranges на уровне настроек Project уже не действуют для этого турнира.
+MVP позволяет создавать лиги только для администраторов
+MVP позволяет только public тип contests
 
 ---
 
