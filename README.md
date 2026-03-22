@@ -89,7 +89,7 @@
 | Add sports | Dropdown select | Football |
 | Add leagues | Dropdown select | Premier League |
 | Select games | Dropdown select | All games or pick games by date Jan 23, 2026 |
-| Add markets | Dropdown select | Match Result |
+| Add markets | Multiple checkbox | Match Result |
 | Odds range\*\* | range | From 0 to 10 |
 | Minimum number of tips to be eligible for prizes | text | =>0 |
 | Rank tipsters by | dropdown | Points |
