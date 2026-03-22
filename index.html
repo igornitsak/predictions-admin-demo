@@ -41,7 +41,7 @@ window.addEventListener("error", (e)=>{
  *     - Cannot edit Points & Ranges if any game status started/finished exists in project.
  *   Contests:
  *     - Search & filters (date range, visibility, sports, league)
- *     - Rules & Prizes required only if visibility=public (MVP: only public exists, but we keep toggle for demo)
+ *     - Prizes (HTML) required only if visibility=public (MVP: only public exists, but we keep toggle for demo)
  *     - Can delete contest only if first game has not started yet.
  * Tipsters:
  *   - List of users with at least one prediction
@@ -126,7 +126,9 @@ const seed = () => {
       projectId: "p1",
       name: "Premier League: January Sprint",
       shortDescription: "<p>Pick the best tips from EPL fixtures and win prizes.</p>",
-      rulesPrizes: "<p><b>Prizes:</b> Top 3 by points. Tie-break: profit.</p>",
+      prizesHtml: "<p><b>Prizes:</b> Top 3 by points. Tie-break: profit.</p>",
+      prizeFund: "1000 coins",
+      rulesDescriptionHtml: "<p><b>Rules:</b> Pick eligible matches, minimum 3 tips to qualify.</p>",
       logoUrl: "",
       startDate: "2026-01-22",
       finishDate: "2026-01-31",
@@ -154,7 +156,9 @@ const seed = () => {
       projectId: "p2",
       name: "NBA Weekend Picks",
       shortDescription: "<p>Basketball contest for weekend games.</p>",
-      rulesPrizes: "<p><b>Prizes:</b> Bragging rights.</p>",
+      prizesHtml: "<p><b>Prizes:</b> Bragging rights.</p>",
+      prizeFund: "0",
+      rulesDescriptionHtml: "<p><b>Description:</b> Weekend NBA challenge.</p>",
       logoUrl: "",
       startDate: "2026-02-07",
       finishDate: "2026-02-09",
@@ -1137,7 +1141,9 @@ function viewContestEdit(contestId){
       projectId: state.data.projects[0]?.id || "",
       name: "",
       shortDescription: "<p></p>",
-      rulesPrizes: "<p></p>",
+      prizesHtml: "<p></p>",
+      prizeFund: "",
+      rulesDescriptionHtml: "<p></p>",
       logoUrl: "",
       startDate: "2026-01-22",
       finishDate: "2026-01-31",
@@ -1170,7 +1176,7 @@ function viewContestEdit(contestId){
   const leagues = ["Premier League","La Liga","NBA","EuroLeague"];
 
   const rulesRequired = (d.visibility === "Public"); // per spec
-  const rulesOk = !rulesRequired || stripHtml(d.rulesPrizes).trim().length > 0;
+  const prizesOk = !rulesRequired || stripHtml(d.prizesHtml).trim().length > 0;
 
   return `
     ${breadcrumb([
@@ -1211,13 +1217,25 @@ function viewContestEdit(contestId){
 
           <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
             <div class="flex items-center justify-between">
-              <label class="text-xs font-medium text-slate-600">Rules & Prizes (HTML)</label>
+              <label class="text-xs font-medium text-slate-600">Prizes (HTML)</label>
               ${rulesRequired ? badge("Required (public)", "amber") : badge("Optional", "slate")}
             </div>
-            <textarea id="contest_rules" rows="4" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm mono ${rulesOk ? "" : "border-rose-300"}">${escapeHtml(d.rulesPrizes)}</textarea>
-            <div class="mt-1 text-xs ${rulesOk ? "text-slate-500" : "text-rose-700"}">
-              ${rulesOk ? "No char limits. Required only for public visibility." : "Required: add Rules & Prizes for public contests."}
+            <textarea id="contest_prizes" rows="4" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm mono ${prizesOk ? "" : "border-rose-300"}">${escapeHtml(d.prizesHtml)}</textarea>
+            <div class="mt-1 text-xs ${prizesOk ? "text-slate-500" : "text-rose-700"}">
+              ${prizesOk ? "No char limits. Required only for public visibility." : "Required: add Prizes for public contests."}
             </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
+            <label class="text-xs font-medium text-slate-600">Prize Fund</label>
+            <input id="contest_prizefund" type="text" value="${escapeHtml(d.prizeFund || "")}" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="e.g., 1000 USD" />
+            <div class="mt-1 text-xs text-slate-500">Text field for prize pool amount.</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
+            <label class="text-xs font-medium text-slate-600">Rules & Description (HTML)</label>
+            <textarea id="contest_rules_description" rows="4" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm mono">${escapeHtml(d.rulesDescriptionHtml || "")}</textarea>
+            <div class="mt-1 text-xs text-slate-500">Separate HTML field for contest rules and description.</div>
           </div>
 
           <div class="rounded-xl border border-slate-200 p-3">
@@ -2041,7 +2059,9 @@ function bindViewListeners(){
   // collect inputs
   d.name = document.getElementById("contest_name")?.value || "";
   d.shortDescription = document.getElementById("contest_short")?.value || "";
-  d.rulesPrizes = document.getElementById("contest_rules")?.value || "";
+  d.prizesHtml = document.getElementById("contest_prizes")?.value || "";
+  d.prizeFund = document.getElementById("contest_prizefund")?.value || "";
+  d.rulesDescriptionHtml = document.getElementById("contest_rules_description")?.value || "";
   d.visibility = document.getElementById("contest_visibility2")?.value || "Public";
   d.projectId = document.getElementById("contest_project2")?.value || d.projectId;
   d.creator = document.getElementById("contest_creator")?.value || "Admin";
@@ -2068,8 +2088,8 @@ function bindViewListeners(){
   if (n < 5 || n > 100) errors.push("Name must be 5..100 chars.");
   if (stripHtml(d.shortDescription).trim().length < 20)
     errors.push("Short Description must be at least 20 chars (after stripping HTML).");
-  if (d.visibility === "Public" && stripHtml(d.rulesPrizes).trim().length === 0)
-    errors.push("Rules & Prizes is required for public contests.");
+  if (d.visibility === "Public" && stripHtml(d.prizesHtml).trim().length === 0)
+    errors.push("Prizes is required for public contests.");
 
   // ✅ ADD THESE TWO LINES HERE
   if (!Array.isArray(d.sports) || d.sports.length === 0)
