@@ -129,6 +129,8 @@ const seed = () => {
       prizesHtml: "<p><b>Prizes:</b> Top 3 by points. Tie-break: profit.</p>",
       prizeFund: "1000 coins",
       rulesDescriptionHtml: "<p><b>Rules:</b> Pick eligible matches, minimum 3 tips to qualify.</p>",
+      simpleContestEnabled: false,
+      simpleContestScoring: { matchOutcome: 3, exactScore: 5 },
       logoUrl: "",
       startDate: "2026-01-22",
       finishDate: "2026-01-31",
@@ -139,7 +141,7 @@ const seed = () => {
       gamesMode: "All games",
       gamesDate: "2026-01-23",
       gameIds: [],
-      markets: ["Match Result"],
+      markets: ["Match Result", "Correct Score"],
       oddsRangeEnabled: true,
       oddsFrom: 1.10,
       oddsTo: 10.00,
@@ -159,6 +161,8 @@ const seed = () => {
       prizesHtml: "<p><b>Prizes:</b> Bragging rights.</p>",
       prizeFund: "0",
       rulesDescriptionHtml: "<p><b>Description:</b> Weekend NBA challenge.</p>",
+      simpleContestEnabled: false,
+      simpleContestScoring: { matchOutcome: 3, exactScore: 5 },
       logoUrl: "",
       startDate: "2026-02-07",
       finishDate: "2026-02-09",
@@ -1144,6 +1148,8 @@ function viewContestEdit(contestId){
       prizesHtml: "<p></p>",
       prizeFund: "",
       rulesDescriptionHtml: "<p></p>",
+      simpleContestEnabled: false,
+      simpleContestScoring: { matchOutcome: 3, exactScore: 5 },
       logoUrl: "",
       startDate: "2026-01-22",
       finishDate: "2026-01-31",
@@ -1154,7 +1160,7 @@ function viewContestEdit(contestId){
       gamesMode: "All games",
       gamesDate: "2026-01-23",
       gameIds: [],
-      markets: ["Match Result"],
+      markets: ["Match Result", "Correct Score"],
       oddsRangeEnabled: false,
       oddsFrom: 0,
       oddsTo: 0,
@@ -1236,6 +1242,32 @@ function viewContestEdit(contestId){
             <label class="text-xs font-medium text-slate-600">Rules & Description (HTML)</label>
             <textarea id="contest_rules_description" rows="4" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm mono">${escapeHtml(d.rulesDescriptionHtml || "")}</textarea>
             <div class="mt-1 text-xs text-slate-500">Separate HTML field for contest rules and description.</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <label class="text-xs font-medium text-slate-600">Simple Contest</label>
+                <div class="mt-1 text-xs text-slate-500">When enabled, users can predict only 1x2 and exact score. Configure scoring below.</div>
+              </div>
+              <label class="inline-flex items-center gap-2 text-sm text-slate-700">
+                <input id="contest_simple_enabled" type="checkbox" class="h-4 w-4 rounded border-slate-300" ${d.simpleContestEnabled ? "checked" : ""} />
+                <span>Enable Simple Contest</span>
+              </label>
+            </div>
+
+            <div class="mt-4 rounded-xl border border-slate-200 p-6 ${d.simpleContestEnabled ? "" : "opacity-50"}">
+              <div class="grid grid-cols-1 gap-6 md:max-w-4xl">
+                <div class="grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] md:items-center gap-3">
+                  <label class="text-sm font-semibold text-slate-700">Исход матча (1X2)</label>
+                  <input id="contest_simple_matchoutcome" type="number" min="0" step="1" value="${escapeHtml(String(d.simpleContestScoring?.matchOutcome ?? d.simpleContestScoring?.homeWin ?? 3))}" ${d.simpleContestEnabled ? "" : "disabled"} class="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" />
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] md:items-center gap-3 md:max-w-[930px]">
+                  <label class="text-sm font-semibold text-slate-700">Точный счет</label>
+                  <input id="contest_simple_exactscore" type="number" min="0" step="1" value="${escapeHtml(String(d.simpleContestScoring?.exactScore ?? 5))}" ${d.simpleContestEnabled ? "" : "disabled"} class="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm" />
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="rounded-xl border border-slate-200 p-3">
@@ -1403,10 +1435,36 @@ function viewContestEdit(contestId){
 
           <div class="rounded-xl border border-slate-200 p-3">
             <label class="text-xs font-medium text-slate-600">Markets</label>
-
-            <select id="contest_markets" class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
-              <option selected>Match Result</option>
-            </select>
+            <div class="mt-2 space-y-3">
+              ${[
+                "Match Result",
+                "Correct Score",
+                "Total Goals"
+              ].map((market)=>{
+                const selectedMarkets = Array.isArray(d.markets) ? d.markets : [];
+                const simpleLocked = d.simpleContestEnabled;
+                const forcedChecked = simpleLocked && (market === "Match Result" || market === "Correct Score");
+                const checked = forcedChecked || selectedMarkets.includes(market);
+                const disabled = simpleLocked;
+                return `
+                  <label class="flex items-center gap-3 text-sm ${disabled ? "text-slate-500" : "text-slate-800"}">
+                    <input
+                      type="checkbox"
+                      data-market-checkbox="${escapeHtml(market)}"
+                      class="h-4 w-4 rounded border-slate-300"
+                      ${checked ? "checked" : ""}
+                      ${disabled ? "disabled" : ""}
+                    />
+                    <span>${market}</span>
+                  </label>
+                `;
+              }).join("")}
+            </div>
+            <div class="mt-2 text-xs text-slate-500">
+              ${d.simpleContestEnabled
+                ? "Simple Contest enabled: only Match Result and Correct Score are available."
+                : "Select one or more markets for the contest."}
+            </div>
           </div>
 
           <div class="rounded-xl border border-slate-200 p-3 lg:col-span-2">
@@ -2062,6 +2120,11 @@ function bindViewListeners(){
   d.prizesHtml = document.getElementById("contest_prizes")?.value || "";
   d.prizeFund = document.getElementById("contest_prizefund")?.value || "";
   d.rulesDescriptionHtml = document.getElementById("contest_rules_description")?.value || "";
+  d.simpleContestEnabled = !!document.getElementById("contest_simple_enabled")?.checked;
+  d.simpleContestScoring = {
+    matchOutcome: Number(document.getElementById("contest_simple_matchoutcome")?.value || 0),
+    exactScore: Number(document.getElementById("contest_simple_exactscore")?.value || 0)
+  };
   d.visibility = document.getElementById("contest_visibility2")?.value || "Public";
   d.projectId = document.getElementById("contest_project2")?.value || d.projectId;
   d.creator = document.getElementById("contest_creator")?.value || "Admin";
@@ -2076,6 +2139,11 @@ function bindViewListeners(){
   d.gamesMode = document.getElementById("contest_gamesmode")?.value || d.gamesMode;
   d.gamesDate = document.getElementById("contest_gamesdate")?.value || d.gamesDate;
   if (d.gamesMode !== "Pick by date") d.gameIds = [];
+  if (d.simpleContestEnabled) {
+    d.markets = ["Match Result", "Correct Score"];
+  } else {
+    d.markets = Array.from(document.querySelectorAll("[data-market-checkbox]:checked")).map(el => el.getAttribute("data-market-checkbox"));
+  }
   d.oddsRangeEnabled = !!document.getElementById("contest_odds_enabled")?.checked;
   d.oddsFrom = Number(document.getElementById("contest_odds_from")?.value || 0);
   d.oddsTo = Number(document.getElementById("contest_odds_to")?.value || 0);
@@ -2090,8 +2158,22 @@ function bindViewListeners(){
     errors.push("Short Description must be at least 20 chars (after stripping HTML).");
   if (d.visibility === "Public" && stripHtml(d.prizesHtml).trim().length === 0)
     errors.push("Prizes is required for public contests.");
+  if (d.simpleContestEnabled) {
+    const scoring = d.simpleContestScoring || {};
+    d.markets = ["Match Result", "Correct Score"];
+    [
+      ["Исход матча (1X2)", scoring.matchOutcome],
+      ["Точный счет", scoring.exactScore]
+    ].forEach(([label, value]) => {
+      if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+        errors.push(`Simple Contest: ${label} must be a whole number >= 0.`);
+      }
+    });
+  }
 
-  // ✅ ADD THESE TWO LINES HERE
+  if (!Array.isArray(d.markets) || d.markets.length === 0)
+    errors.push("Select at least one market.");
+
   if (!Array.isArray(d.sports) || d.sports.length === 0)
     errors.push("Select at least one sport.");
   if (!Array.isArray(d.leagues) || d.leagues.length === 0)
@@ -2142,14 +2224,27 @@ function bindViewListeners(){
   });
 
   // contest form toggles re-render needed
-  ["contest_visibility2","contest_gamesmode","contest_gamesdate","contest_odds_enabled"].forEach(id=>{
+  ["contest_visibility2","contest_gamesmode","contest_gamesdate","contest_odds_enabled","contest_simple_enabled"].forEach(id=>{
     const el = document.getElementById(id);
     if (el) el.addEventListener("change", ()=>{
       if (id === "contest_odds_enabled") state.draft.oddsRangeEnabled = !!el.checked;
       if (id === "contest_gamesmode") state.draft.gamesMode = el.value;
       if (id === "contest_gamesdate") state.draft.gamesDate = el.value;
       if (id === "contest_visibility2") state.draft.visibility = el.value;
+      if (id === "contest_simple_enabled") {
+        state.draft.simpleContestEnabled = !!el.checked;
+        if (state.draft.simpleContestEnabled) {
+          state.draft.markets = ["Match Result", "Correct Score"];
+        }
+      }
       render();
+    });
+  });
+
+  document.querySelectorAll("[data-market-checkbox]").forEach(el=>{
+    el.addEventListener("change", ()=>{
+      if (!state.draft || state.draft.simpleContestEnabled) return;
+      state.draft.markets = Array.from(document.querySelectorAll("[data-market-checkbox]:checked")).map(x => x.getAttribute("data-market-checkbox"));
     });
   });
 
